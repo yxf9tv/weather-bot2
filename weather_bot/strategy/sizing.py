@@ -11,7 +11,9 @@ def basket_qty(venue: Venue, leg_prices: list[float], max_basket_cost: float) ->
     """Largest whole quantity such that every leg meets the venue minimum and cost ≤ cap. None if impossible."""
     if not leg_prices or any(p <= 0 for p in leg_prices):
         return None
-    min_q = max(venue.min_qty(p) for p in leg_prices)
+    # Size so that every leg can later be bought as a marketable order (Polymarket: >= $1 per order), otherwise a
+    # basket can never be completed after a partial fill.
+    min_q = max(venue.min_qty(p, marketable=True) for p in leg_prices)
     sum_p = sum(leg_prices)
     cap_q = math.floor(max_basket_cost / sum_p + 1e-9)
     if cap_q < min_q:
