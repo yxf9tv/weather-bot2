@@ -49,6 +49,7 @@ async def cmd_run(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("py_clob_client_v2").setLevel(logging.CRITICAL)  # it logs the expected create-then-derive 400
     settings = load_settings()
     app = App.build(settings, dry=args.dry)
     live = settings.live_trading and not args.dry
