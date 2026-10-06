@@ -78,7 +78,7 @@ def hourly_max_from_obs(obs: list[tuple[dt.datetime, float]], date: dt.date, tz:
 async def iem_metar_obs(client: httpx.AsyncClient, station: str, date: dt.date, tz: str) -> list[tuple[dt.datetime, float]]:
     """Routine + special METAR temps (°F) covering the local day, from IEM (UTC window with a day of slack)."""
     start = dt.datetime.combine(date, dt.time(0, 0), tzinfo=ZoneInfo(tz)).astimezone(dt.timezone.utc)
-    end = start + dt.timedelta(hours=30)
+    end = start + dt.timedelta(hours=30) + dt.timedelta(days=1)  # IEM's day2 is an exclusive 00:00Z boundary
     params = {"station": station[1:] if station.startswith("K") else station, "data": "tmpf",
               "year1": start.year, "month1": start.month, "day1": start.day,
               "year2": end.year, "month2": end.month, "day2": end.day,
