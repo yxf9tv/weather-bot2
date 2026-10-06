@@ -42,9 +42,11 @@ class Settings(BaseSettings):
     min_hours_to_target: float = 8.0
     max_hours_to_target: float = 48.0
 
-    # Quoting
+    # Quoting / execution
+    taker_when_edge: bool = True          # lift all asks at once (FOK legs) when the taker basket still clears MIN_NET_EDGE
+    min_resting_bid: float = 0.05         # legs priced below this are not rested; they are bought at completion
     bid_ttl_min: int = 30
-    basket_complete_timeout_min: int = 120
+    basket_complete_timeout_min: int = 0  # evaluate completion as soon as any leg fills
     unwind_ttl_min: int = 30
 
     # Refresh cadence

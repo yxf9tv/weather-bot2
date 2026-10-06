@@ -194,3 +194,68 @@ async def test_partial_completion_uses_current_probabilities(env):
     # model collapsed: current probabilities make completion -EV even at a cheap ask
     await q.refresh(NOW + dt.timedelta(minutes=121), fair_bids={"k": {"b": 0.10, "c": 0.10, "d": 0.05}})
     assert basket(db, bid)["status"] == "unwinding"
+
+
+@pytest.mark.unit
+async def test_taker_path_when_asks_clear_edge(tmp_path):
+    db = Database(tmp_path / "t2.sqlite")
+    s = Settings(_env_file=None, min_net_edge=0.10)
+    v = FakeVenue()
+    v.books = {"b": book("b", 0.10, 0.12), "c": book("c", 0.10, 0.12), "d": book("d", 0.05, 0.06)}  # Σask 0.30 vs P 0.80
+
+    async def place(iid, price, qty, *, side="buy", post_only=True, ioc=False, client_id):
+        v.placed.append({"iid": iid, "price": price, "qty": qty, "side": side, "ioc": ioc})
+        oid = f"o{len(v.orders) + 1}"
+        v.orders[oid] = {"iid": iid, "price": price, "qty": qty, "filled": qty if ioc else 0.0,
+                         "status": "filled" if ioc else "resting", "side": side}
+        return OrderResult(oid, "filled" if ioc else "resting", qty if ioc else 0.0, price if ioc else None, {})
+
+    v.place_limit = place  # type: ignore[method-assign]
+    q = Quoter({"kalshi": v}, db, s, live=True)
+    ev = evaluate(BINS, PROBS, v.books, v, min_net_edge=0.10, qty=1.0)
+    assert ev.net_edge_taker >= 0.10
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    b = basket(db, bid)
+    assert b["status"] == "complete" and all(p["ioc"] for p in v.placed) and len(v.placed) == 3
+    assert b["filled_cost"] == pytest.approx(0.30)
+    db.close()
+
+
+@pytest.mark.unit
+async def test_cheap_legs_deferred_then_completed_on_center_fill(tmp_path):
+    db = Database(tmp_path / "t3.sqlite")
+    s = Settings(_env_file=None, min_net_edge=0.10, min_resting_bid=0.05, basket_complete_timeout_min=0)
+    v = FakeVenue()
+    probs = {"63° to 64°": 0.45, "65° to 66°": 0.40, "67° to 68°": 0.03}
+    v.books = {"b": book("b", 0.30, 0.50), "c": book("c", 0.30, 0.50), "d": book("d", 0.01, 0.02)}
+    q = Quoter({"kalshi": v}, db, s, live=True)
+    ev = evaluate(BINS, probs, v.books, v, min_net_edge=0.10, qty=1.0)
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    assert len(v.placed) == 2, "the 1-cent tail leg must not be rested"
+    assert "deferred" in basket(db, bid)["notes"]
+    v.fill("b")
+    v.fill("c")
+    await q.refresh(NOW + dt.timedelta(minutes=1))
+    b = basket(db, bid)
+    lifts = [p for p in v.placed if p["ioc"]]
+    assert b["status"] == "completing" and len(lifts) == 1 and lifts[0]["iid"] == "d" and lifts[0]["price"] == 0.02
+    db.close()
+
+
+@pytest.mark.unit
+async def test_tail_fill_alone_unwinds_immediately(tmp_path):
+    db = Database(tmp_path / "t4.sqlite")
+    s = Settings(_env_file=None, min_net_edge=0.10, min_resting_bid=0.0, basket_complete_timeout_min=0)
+    v = FakeVenue()
+    probs = {"63° to 64°": 0.45, "65° to 66°": 0.40, "67° to 68°": 0.03}
+    v.books = {"b": book("b", 0.30, 0.50), "c": book("c", 0.30, 0.50), "d": book("d", 0.01, 0.02)}
+    q = Quoter({"kalshi": v}, db, s, live=True)
+    ev = evaluate(BINS, probs, v.books, v, min_net_edge=0.10, qty=1.0)
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("d")  # only the tail fills; completing at 0.50+0.50 has no edge
+    await q.refresh(NOW + dt.timedelta(minutes=1))
+    b = basket(db, bid)
+    assert b["status"] == "unwinding"
+    sells = [p for p in v.placed if p["side"] == "sell"]
+    assert len(sells) == 1 and sells[0]["iid"] == "d"
+    db.close()

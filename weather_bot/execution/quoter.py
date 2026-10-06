@@ -64,20 +64,38 @@ class Quoter:
         basket_id = int(cur.lastrowid)
         sem = asyncio.Semaphore(3)  # avoid bursting a venue's transport with every leg at once
 
+        # Taker path: every ask is cheap enough that the whole basket still clears the edge → take it now.
+        taker = (self.settings.taker_when_edge and ev.net_edge_taker is not None
+                 and ev.net_edge_taker >= self.settings.min_net_edge
+                 and all(l.best_ask is not None and (l.ask_size or 0) >= ev.qty for l in ev.legs)
+                 and all(ev.qty >= venue.min_qty(l.best_ask, marketable=True) for l in ev.legs))  # type: ignore[arg-type]
+
         async def _guarded(leg: Leg):
             async with sem:
+                if taker:
+                    return await self._place_leg(venue, basket_id, leg, ev.qty, price=leg.best_ask, ioc=True)
                 return await self._place_leg(venue, basket_id, leg, ev.qty)
 
-        results = await asyncio.gather(*(_guarded(leg) for leg in ev.legs), return_exceptions=True)
+        legs_to_rest = [l for l in ev.legs if taker or l.bid_price >= self.settings.min_resting_bid]
+        results = await asyncio.gather(*(_guarded(leg) for leg in legs_to_rest), return_exceptions=True)
         rejected = [r for r in results if isinstance(r, BaseException) or r.status in ("rejected", "unknown")]
         if rejected:
             await self._cancel_open_legs(venue, basket_id)
             self._set_status(basket_id, "aborted", notes=f"{len(rejected)} leg(s) rejected")
             self.db.add_event("warn", "basket", f"basket {basket_id} aborted: {rejected[0]!r}")
             return basket_id
-        self._set_status(basket_id, "resting")
+        if taker:
+            filled = [r for r in results if not isinstance(r, BaseException) and r.status == "filled"]
+            cost = sum(r.filled_qty * (r.avg_fill_price or 0) for r in filled)  # type: ignore[union-attr]
+            status = "complete" if len(filled) == len(ev.legs) else "partial"
+            self._set_status(basket_id, status, filled_cost=cost, notes="taker: lifted asks")
+            self.db.add_event("info", "basket", f"basket {basket_id} {status} as taker on {venue.name} {market_key} "
+                                                f"{ev.label} (edge {ev.net_edge_taker:.3f})", {"qty": ev.qty})
+            return basket_id
+        skipped = len(ev.legs) - len(legs_to_rest)
+        self._set_status(basket_id, "resting", notes=f"{skipped} cheap leg(s) deferred to completion" if skipped else None)
         self.db.add_event("info", "basket", f"basket {basket_id} resting on {venue.name} {market_key} {ev.label}",
-                          {"qty": ev.qty, "sum_bids": ev.sum_bids, "edge": ev.net_edge_maker})
+                          {"qty": ev.qty, "sum_bids": ev.sum_bids, "edge": ev.net_edge_maker, "deferred_legs": skipped})
         return basket_id
 
     async def _place_leg(self, venue: Venue, basket_id: int, leg: Leg, qty: float, *, side: str = "buy",
@@ -115,13 +133,14 @@ class Quoter:
     async def _refresh_basket(self, venue: Venue, b, now: dt.datetime, fair: dict[str, float] | None) -> None:
         legs = await self._sync_legs(venue, b["id"])
         buys = [l for l in legs if l.status != "cancelled"]
+        n_legs_total = len(json.loads(b["legs"]))
         filled_cost = sum(l.filled_qty * (l.avg_fill_price or l.bid) for l in self._buy_legs(b["id"]))
         n_full = sum(1 for l in buys if l.status == "filled")
         n_any = sum(1 for l in buys if l.filled_qty > 0)
         age_min = (now - dt.datetime.fromisoformat(b["created_ts"])).total_seconds() / 60
         status = b["status"]
         if status in ("resting", "partial"):
-            if buys and n_full == len(buys):
+            if buys and n_full == n_legs_total:
                 self._set_status(b["id"], "complete", filled_cost=filled_cost)
                 self.db.add_event("info", "basket", f"basket {b['id']} complete, cost ${filled_cost:.2f}")
                 return
@@ -150,6 +169,11 @@ class Quoter:
         from .risk import snapshot
 
         remaining = [l for l in legs if l.status in ("resting", "partial")]
+        ordered_ids = {l.instrument_id for l in legs}
+        for meta in json.loads(b["legs"]):
+            if meta["instrument_id"] not in ordered_ids:  # deferred cheap leg, never rested
+                remaining.append(LegState(0, meta["instrument_id"], meta.get("label", "?"), float(meta.get("prob", 0.0)),
+                                          "", float(meta.get("bid", 0.0)), qty_of(b), "deferred", 0.0, None))
         books = {}
         for l in remaining:
             try:
@@ -157,7 +181,7 @@ class Quoter:
             except Exception:
                 pass
         qty = float(b["qty"])
-        active = [l for l in legs if l.status != "cancelled"]
+        active = [l for l in legs if l.status != "cancelled"] + [l for l in remaining if l.status == "deferred"]
         prob = sum((fair or {}).get(l.instrument_id, l.prob) for l in active)
         asks = [books[l.instrument_id].best_ask for l in remaining if l.instrument_id in books]
         blocked = b["market_key"] in getattr(self, "_blocked", set())
@@ -246,6 +270,10 @@ class Quoter:
         self.db.conn.execute(
             "UPDATE baskets SET status=?, filled_cost=COALESCE(?, filled_cost), notes=COALESCE(?, notes), updated_ts=? "
             "WHERE id=?", (status, filled_cost, notes, _now_iso(), basket_id))
+
+
+def qty_of(b) -> float:
+    return float(b["qty"] or 0)
 
 
 def _bin_stub(l: LegState):

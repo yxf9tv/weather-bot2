@@ -58,7 +58,11 @@ Toggle with `POLYMARKET_INTERNATIONAL=false` or restrict with `POLYMARKET_INTL_C
 3. Enumerate 3–6 contiguous bins, price each leg at model-fair minus its share of `MIN_NET_EDGE`, never crossing
    the ask. Size at the venue minimum within `MAX_BASKET_COST_<VENUE>`.
 4. Gate on range probability, net edge, model disagreement, NBM age, horizon, risk caps and the kill switch.
-5. Post GTC post-only bids for every leg. Re-quote on TTL or model move; resolve partial baskets after a timeout.
+5. If lifting every ask still clears `MIN_NET_EDGE`, buy the whole basket at once with fill-or-kill legs
+   (`TAKER_WHEN_EDGE`). Otherwise rest GTC post-only bids on legs priced ≥ `MIN_RESTING_BID`; cheaper tail legs are
+   bought at completion. As soon as a leg fills, re-price the rest at the asks with current probabilities: complete the
+   basket if it still clears the edge and the market is not gated, otherwise sell the filled leg back. Re-quote on TTL
+   or when a bid rises above model fair value.
 6. Once a day at 14:00Z the loop scores finished days against the settlement source and prints calibration buckets
    for NBM, Open-Meteo and the market (`score --report` does the same on demand).
 
