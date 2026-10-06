@@ -11,7 +11,6 @@ from .execution.quoter import Quoter
 from .execution.risk import KillSwitch, allows, snapshot
 from .markets.model import WeatherMarket
 from .storage.db import Database
-from .strategy.edge import price_legs
 from .strategy.scanner import Opportunity, evaluate_market
 from .venues.base import Venue
 from .weather.service import ForecastService
@@ -75,9 +74,9 @@ class App:
             opp = await evaluate_market(m, venue, self.svc, self.db, self.settings, now)
             opps.append(opp)
             if opp.dists and opp.dists.nbm and m.rules.confident:
+                # Model fair value per leg (uncapped). A resting bid above this is no longer +EV -> re-quote.
                 probs = opp.dists.nbm.bin_probabilities(m.bins)
-                legs = price_legs(m.sorted_bins(), probs, {}, min_net_edge=self.settings.min_net_edge, tick=venue.tick)
-                fair_bids[m.key] = {l.bin.instrument_id: l.bid_price for l in legs}
+                fair_bids[m.key] = {b.instrument_id: probs[b.label] for b in m.bins}
         await self.quoter.refresh(now, fair_bids)
         await self._place_new(opps, now)
         return opps

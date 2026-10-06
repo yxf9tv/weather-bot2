@@ -92,7 +92,7 @@ class Quoter:
 
     # ---------- reconciliation ----------
     async def refresh(self, now: dt.datetime, fair_bids: dict[str, dict[str, float]] | None = None) -> None:
-        """fair_bids: market_key -> {instrument_id: current fair-minus-edge bid}. Used to re-quote on model moves."""
+        """fair_bids: market_key -> {instrument_id: current model probability}. A resting bid above fair is cancelled."""
         rows = self.db.conn.execute(
             "SELECT * FROM baskets WHERE status IN ('resting','partial','completing','unwinding')").fetchall()
         for b in rows:
