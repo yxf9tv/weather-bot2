@@ -62,8 +62,13 @@ class Quoter:
             (created, venue.name, market_key, opportunity_id, "placing", legs_json(ev.legs), ev.cost, 0.0, ev.qty,
              created))
         basket_id = int(cur.lastrowid)
-        results = await asyncio.gather(*(self._place_leg(venue, basket_id, leg, ev.qty) for leg in ev.legs),
-                                       return_exceptions=True)
+        sem = asyncio.Semaphore(3)  # avoid bursting a venue's transport with every leg at once
+
+        async def _guarded(leg: Leg):
+            async with sem:
+                return await self._place_leg(venue, basket_id, leg, ev.qty)
+
+        results = await asyncio.gather(*(_guarded(leg) for leg in ev.legs), return_exceptions=True)
         rejected = [r for r in results if isinstance(r, BaseException) or r.status in ("rejected", "unknown")]
         if rejected:
             await self._cancel_open_legs(venue, basket_id)

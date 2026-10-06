@@ -195,10 +195,17 @@ class PolymarketVenue:
             return c.post_order(signed, OrderType.GTC, post_only=post_only) if post_only \
                 else c.post_order(signed, OrderType.GTC)
 
-        try:
-            resp = await asyncio.to_thread(_do)
-        except Exception as exc:  # SDK raises on HTTP errors
-            return OrderResult("", "rejected", 0.0, None, {"error": str(exc)})
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = await asyncio.to_thread(_do)
+                break
+            except Exception as exc:  # SDK raises on HTTP errors; transport blips come back as "Request exception"
+                transient = "Request exception" in str(exc) or "status_code=None" in str(exc)
+                if not transient or attempt == 2:
+                    return OrderResult("", "rejected", 0.0, None, {"error": str(exc), "attempts": attempt + 1})
+                await asyncio.sleep(0.8 * (attempt + 1))
+        assert resp is not None
         oid = str(resp.get("orderID") or resp.get("orderId") or "")
         status = (resp.get("status") or "live").lower()
         st = {"matched": "filled", "live": "resting", "delayed": "resting"}.get(status, status)
