@@ -13,6 +13,7 @@ import httpx
 from ..config import Settings
 from ..markets.model import Bin, WeatherMarket
 from ..markets.rules import parse_bin_label, parse_polymarket_rules
+from ..markets.station_lookup import load_cache, lookup_station
 from ..markets.stations import POLYMARKET_CITY_STATION, STATIONS
 from .base import BookLevel, OrderBook, OrderResult
 
@@ -58,17 +59,41 @@ class PolymarketVenue:
             events.extend(page)
             if len(page) < 100:
                 break
+        load_cache(self.settings.stations_cache)
         out = []
         for ev in events:
+            slug = ev.get("slug", "")
+            m = _SLUG_RE.match(slug)
+            if m and m["city"] not in POLYMARKET_CITY_STATION and self.settings.polymarket_international:
+                if self.settings.polymarket_intl_cities and m["city"] not in self.settings.polymarket_intl_cities:
+                    continue
+                await self._ensure_station(ev, m["city"])
             wm = self.build_market(ev)
             if wm is not None:
                 out.append(wm)
         return out
 
+    async def _ensure_station(self, ev: dict, city: str) -> None:
+        rows = ev.get("markets") or []
+        if not rows:
+            return
+        first = rows[0]
+        rules = parse_polymarket_rules(first.get("description", ""), first.get("resolutionSource"), ev.get("slug", ""))
+        if rules.station_icao and rules.station_icao not in STATIONS:
+            await lookup_station(self.client, rules.station_icao, self.settings.stations_cache, unit=rules.unit or "C",
+                                 city=city)
+
     def build_market(self, ev: dict) -> WeatherMarket | None:
         slug = ev.get("slug", "")
         m = _SLUG_RE.match(slug)
-        if not m or m["city"] not in POLYMARKET_CITY_STATION or m["city"] not in self.settings.polymarket_cities:
+        if not m:
+            return None
+        is_us = m["city"] in POLYMARKET_CITY_STATION
+        if is_us and m["city"] not in self.settings.polymarket_cities:
+            return None
+        if not is_us and not self.settings.polymarket_international:
+            return None
+        if not is_us and self.settings.polymarket_intl_cities and m["city"] not in self.settings.polymarket_intl_cities:
             return None
         rows = ev.get("markets") or []
         if not rows:
@@ -76,9 +101,17 @@ class PolymarketVenue:
         first = rows[0]
         rules = parse_polymarket_rules(first.get("description", ""), first.get("resolutionSource"), slug)
         problems = list(rules.problems)
-        expected = POLYMARKET_CITY_STATION[m["city"]]
-        if rules.station_icao and rules.station_icao != expected:
-            problems.append(f"city {m['city']} expected {expected}, rules say {rules.station_icao}")
+        if is_us:
+            expected = POLYMARKET_CITY_STATION[m["city"]]
+            if rules.station_icao and rules.station_icao != expected:
+                problems.append(f"city {m['city']} expected {expected}, rules say {rules.station_icao}")
+            if rules.unit != "F":
+                problems.append("US market not in Fahrenheit")
+        else:
+            if rules.unit != "C":
+                problems.append("international market not in Celsius")
+            if rules.station_icao and rules.station_icao not in STATIONS:
+                problems.append(f"station {rules.station_icao} could not be resolved (no coordinates/timezone)")
         bins: list[Bin] = []
         for row in rows:
             try:
@@ -98,7 +131,7 @@ class PolymarketVenue:
         wm = WeatherMarket(
             venue="polymarket", event_id=slug, city=st.name if st else m["city"],
             station_icao=rules.station_icao or "?", target_date=rules.target_date or dt.date(1970, 1, 1),
-            timezone=st.tz if st else "UTC", quantity="hourly_max", unit="F", rules=rules, bins=tuple(bins),
+            timezone=st.tz if st else "UTC", quantity="hourly_max", unit=rules.unit or "F", rules=rules, bins=tuple(bins),
             opens_at=_ts(ev.get("startDate")), closes_at=_ts(ev.get("endDate")),
             raw_rules_text=first.get("description", ""),
             extra={"neg_risk": bool(ev.get("negRisk")), "condition_ids": [r.get("conditionId") for r in rows],

@@ -30,6 +30,7 @@ _POLY_RE = re.compile(
 _POLY_SITE_RE = re.compile(r"timeseries\?site=(?P<site>[a-z0-9]{3,4})", re.I)
 _POLY_SLUG_DATE_RE = re.compile(r"-on-(?P<mon>[a-z]+)-(?P<day>\d{1,2})-(?P<year>\d{4})$")
 _POLY_HOURLY_RE = re.compile(r"Show Hourly Data", re.I)
+_POLY_TEMP_COL_RE = re.compile(r'highest reading under the "Temp" column', re.I)
 
 
 def parse_kalshi_rules(rules_primary: str) -> RulesParse:
@@ -66,18 +67,17 @@ def parse_polymarket_rules(description: str, resolution_source: str | None, slug
     if m["measure"] != "highest":
         problems.append(f"measure is {m['measure']}")
     unit = "F" if m["unit"] == "Fahrenheit" else "C"
-    if unit != "F":
-        problems.append("unit is not Fahrenheit")
     site = _POLY_SITE_RE.search(resolution_source or "") or _POLY_SITE_RE.search(description or "")
     icao = None
     if site:
         icao = site["site"].upper()
-        if icao not in STATIONS:
+        if unit == "F" and icao not in STATIONS:
             problems.append(f"unknown station {icao}")
     else:
         problems.append("no weather.gov timeseries site in resolution source")
-    if not _POLY_HOURLY_RE.search(description or ""):
-        problems.append("description does not bind to 'Show Hourly Data'")
+    hourly = bool(_POLY_HOURLY_RE.search(description or ""))
+    if not hourly and not _POLY_TEMP_COL_RE.search(description or ""):
+        problems.append("description does not bind to the weather.gov Temp column")
     sd = _POLY_SLUG_DATE_RE.search(slug or "")
     date = None
     if sd:
@@ -88,14 +88,15 @@ def parse_polymarket_rules(description: str, resolution_source: str | None, slug
     else:
         problems.append("slug has no date")
     return RulesParse(icao, m["name"], date, unit, "hourly_max", "weather.gov timeseries",
-                      confident=not problems, problems=tuple(problems))
+                      confident=not problems, problems=tuple(problems), hourly_filter=hourly)
 
 
 # Bin labels. Kalshi: "62° or below" | "63° to 64°" | "71° or above"
 # Polymarket: "61°F or below" | "62-63°F" | "80°F or higher"
-_BELOW_RE = re.compile(r"^(?P<t>-?\d+)°?F? or below$")
-_ABOVE_RE = re.compile(r"^(?P<t>-?\d+)°?F? or (?:above|higher)$")
-_RANGE_RE = re.compile(r"^(?P<lo>-?\d+)°?F?\s*(?:to|-)\s*(?P<hi>-?\d+)°?F?$")
+_BELOW_RE = re.compile(r"^(?P<t>-?\d+)°?[FC]? or below$")
+_ABOVE_RE = re.compile(r"^(?P<t>-?\d+)°?[FC]? or (?:above|higher)$")
+_RANGE_RE = re.compile(r"^(?P<lo>-?\d+)°?[FC]?\s*(?:to|-)\s*(?P<hi>-?\d+)°?[FC]?$")
+_SINGLE_RE = re.compile(r"^(?P<t>-?\d+)°[FC]$")
 
 
 def parse_bin_label(label: str, instrument_id: str) -> Bin | None:
@@ -109,4 +110,6 @@ def parse_bin_label(label: str, instrument_id: str) -> Bin | None:
         if lo > hi:
             return None
         return Bin(text, lo, hi, instrument_id)
+    if m := _SINGLE_RE.match(text):
+        return Bin(text, int(m["t"]), int(m["t"]), instrument_id)
     return None

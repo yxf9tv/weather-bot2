@@ -82,7 +82,8 @@ class ForecastService:
         async def one(s: Station):
             async with sem:
                 try:
-                    days = await fetch_ensemble(self.client, s.icao, s.lat, s.lon, s.tz, self.settings.openmeteo_api_key)
+                    days = await fetch_ensemble(self.client, s.icao, s.lat, s.lon, s.tz, self.settings.openmeteo_api_key,
+                                                unit=s.unit)
                 except httpx.HTTPError as exc:
                     if self.db:
                         self.db.add_event("warn", "openmeteo", f"{s.icao}: {exc!r}")
@@ -98,8 +99,8 @@ class ForecastService:
     async def refresh_nws(self, stations: list[Station], now: dt.datetime | None = None) -> None:
         now = now or dt.datetime.now(dt.timezone.utc)
         ua = self.settings.nws_user_agent
-        due = [s for s in stations if now - self._nws_at.get(s.icao, dt.datetime.min.replace(tzinfo=dt.timezone.utc))
-               >= dt.timedelta(minutes=30)]
+        due = [s for s in stations if s.icao.startswith("K") and s.unit == "F"
+               and now - self._nws_at.get(s.icao, dt.datetime.min.replace(tzinfo=dt.timezone.utc)) >= dt.timedelta(minutes=30)]
         sem = asyncio.Semaphore(3)
 
         async def one(s: Station):
@@ -136,18 +137,26 @@ class ForecastService:
             dt.datetime.now(dt.timezone.utc),
         )
 
-    def distributions(self, fc: StationForecast, quantity: str) -> Distributions:
+    def distributions(self, fc: StationForecast, quantity: str, unit: str = "F") -> Distributions:
         s = self.settings
+        om = None
+        if fc.ensemble and fc.ensemble.all_members():
+            if unit == "C":
+                om_offset = s.hourly_max_delta_c if quantity == "hourly_max" else 0.0
+                om = from_members(fc.ensemble.all_members(), bias_f=om_offset, inflation=1.4,
+                                  extra_sigma_f=s.openmeteo_extra_sigma_c)
+            else:
+                om_offset = s.hourly_max_delta_f if quantity == "hourly_max" else 0.0
+                om = from_members(fc.ensemble.all_members(), bias_f=om_offset, inflation=1.4,
+                                  extra_sigma_f=s.openmeteo_extra_sigma_f)
+        if unit == "C" or fc.nbm is None:
+            return Distributions(None, om)
         offset = s.cli_window_delta_f if quantity == "cli_max" else s.hourly_max_delta_f
         inflation = s.nbm_sigma_inflation
         cal = self.calibration.get(f"{fc.station}:{quantity}")
         if cal:
             offset, inflation = float(cal["offset_f"]), float(cal["inflation"])
-        nbm = from_percentiles(fc.nbm, offset_f=offset, inflation=inflation) if fc.nbm else None
-        om = None
-        if fc.ensemble and fc.ensemble.all_members():
-            om_offset = 0.0 if quantity == "cli_max" else s.hourly_max_delta_f
-            om = from_members(fc.ensemble.all_members(), bias_f=om_offset, inflation=1.4, extra_sigma_f=1.0)
+        nbm = from_percentiles(fc.nbm, offset_f=offset, inflation=inflation)
         return Distributions(nbm, om)
 
     @property

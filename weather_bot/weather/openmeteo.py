@@ -20,7 +20,8 @@ class EnsembleDay:
     station: str
     target_date: dt.date
     fetched_at: dt.datetime
-    members: dict[str, list[float]]  # model -> member values (°F), control included
+    members: dict[str, list[float]]  # model -> member values in `unit`, control included
+    unit: str = "F"
 
     def all_members(self) -> list[float]:
         return [v for vals in self.members.values() for v in vals]
@@ -28,14 +29,20 @@ class EnsembleDay:
     def model_means(self) -> dict[str, float]:
         return {m: sum(v) / len(v) for m, v in self.members.items() if v}
 
+    def model_spread(self) -> float:
+        means = list(self.model_means().values())
+        return (max(means) - min(means)) if len(means) >= 2 else 0.0
+
     def as_dict(self) -> dict:
-        return {"station": self.station, "target_date": self.target_date.isoformat(),
+        return {"station": self.station, "target_date": self.target_date.isoformat(), "unit": self.unit,
                 "fetched_at": self.fetched_at.isoformat(), "members": self.members}
 
 
 async def fetch_ensemble(client: httpx.AsyncClient, station: str, lat: float, lon: float, tz: str,
-                         api_key: str | None = None, models=DEFAULT_MODELS, forecast_days: int = 4) -> list[EnsembleDay]:
-    params = {"latitude": lat, "longitude": lon, "daily": "temperature_2m_max", "temperature_unit": "fahrenheit",
+                         api_key: str | None = None, models=DEFAULT_MODELS, forecast_days: int = 4,
+                         unit: str = "F") -> list[EnsembleDay]:
+    params = {"latitude": lat, "longitude": lon, "daily": "temperature_2m_max",
+              "temperature_unit": "celsius" if unit == "C" else "fahrenheit",
               "timezone": tz, "forecast_days": forecast_days, "models": ",".join(models)}
     host = FREE_HOST
     if api_key:
@@ -43,10 +50,10 @@ async def fetch_ensemble(client: httpx.AsyncClient, station: str, lat: float, lo
         params["apikey"] = api_key
     r = await client.get(host, params=params)
     r.raise_for_status()
-    return parse_ensemble(station, r.json())
+    return parse_ensemble(station, r.json(), unit)
 
 
-def parse_ensemble(station: str, payload: dict) -> list[EnsembleDay]:
+def parse_ensemble(station: str, payload: dict, unit: str = "F") -> list[EnsembleDay]:
     daily = payload.get("daily") or {}
     dates = [dt.date.fromisoformat(d) for d in daily.get("time", [])]
     fetched = dt.datetime.now(dt.timezone.utc)
@@ -59,4 +66,4 @@ def parse_ensemble(station: str, payload: dict) -> list[EnsembleDay]:
         for idx, v in enumerate(series):
             if v is not None and idx < len(per_day):
                 per_day[idx].setdefault(model, []).append(float(v))
-    return [EnsembleDay(station, d, fetched, members) for d, members in zip(dates, per_day) if members]
+    return [EnsembleDay(station, d, fetched, members, unit) for d, members in zip(dates, per_day) if members]

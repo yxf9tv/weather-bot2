@@ -45,6 +45,7 @@ class RulesParse:
     source: str | None
     confident: bool
     problems: tuple[str, ...] = ()
+    hourly_filter: bool = True  # Polymarket US: only obs at :51–:59/:00–:04 count; intl: every observation
 
 
 @dataclass(frozen=True)

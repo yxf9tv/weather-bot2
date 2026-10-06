@@ -12,7 +12,11 @@ LINE = "-" * 60
 def market_block(m: WeatherMarket, fc: StationForecast | None, dists: Distributions | None,
                  best: BasketEval | None, decision: str, reason: str | None, hours: float) -> str:
     out = [LINE, f"{m.city.upper()} HIGH | {m.target_date:%b %d} | {m.venue.upper()}",
-           f"Station: {m.station_icao} ({m.quantity})   {hours:.1f}h to target"]
+           f"Station: {m.station_icao} ({m.quantity}, °{m.unit})   {hours:.1f}h to target"]
+    if fc and fc.nbm is None and dists and dists.openmeteo and fc.ensemble:
+        means = fc.ensemble.model_means()
+        out.append(f"Ensemble: mean {dists.openmeteo.mean:.1f} sd {dists.openmeteo.sd:.1f}  "
+                   + "  ".join(f"{k.split('_')[0]} {v:.1f}" for k, v in means.items()))
     if fc and fc.nbm:
         n = fc.nbm
         out.append(f"NBM: mean {n.mean:.0f} sd {n.sd:.0f}  P10 {n.p10:.0f} P50 {n.p50:.0f} P90 {n.p90:.0f}"

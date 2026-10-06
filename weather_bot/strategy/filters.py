@@ -34,7 +34,7 @@ def market_gate_vs_model(m: WeatherMarket, model_mean: float, s: Settings) -> st
     mkt = market_implied_mean(m)
     if mkt is None:
         return None
-    if abs(mkt - model_mean) > s.max_market_disagreement_f:
+    if abs(mkt - model_mean) > s.max_market_disagreement(m.unit):
         return f"market disagrees (model {model_mean:.1f} vs market {mkt:.1f})"
     return None
 
@@ -52,7 +52,22 @@ def market_gate(m: WeatherMarket, now: dt.datetime, s: Settings) -> str | None:
     return None
 
 
-def forecast_gate(fc: StationForecast, dists: Distributions, now: dt.datetime, s: Settings) -> str | None:
+def forecast_gate(fc: StationForecast, dists: Distributions, now: dt.datetime, s: Settings,
+                  unit: str = "F") -> str | None:
+    if unit == "C":
+        # International: Open-Meteo ensemble only. Confidence = agreement between ECMWF / GEFS / ICON means.
+        if fc.ensemble is None or dists.openmeteo is None:
+            return "no ensemble"
+        age = (now - fc.ensemble.fetched_at).total_seconds() / 3600
+        if age > s.max_bulletin_age_h:
+            return f"ensemble stale ({age:.1f}h)"
+        spread = fc.ensemble.model_spread()
+        if spread > s.max_intl_model_spread_c:
+            means = fc.ensemble.model_means()
+            return "models disagree (" + ", ".join(f"{k.split('_')[0]} {v:.1f}" for k, v in means.items()) + ")"
+        if dists.openmeteo.sd > s.max_nbp_sd_f * 5 / 9:
+            return f"ensemble sd {dists.openmeteo.sd:.1f}C too wide"
+        return None
     if fc.nbm is None or dists.nbm is None:
         return "no NBM row"
     age = fc.nbm_age_h(now)

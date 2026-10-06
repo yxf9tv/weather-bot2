@@ -60,10 +60,17 @@ class Settings(BaseSettings):
     max_model_disagreement_f: float = 3.0
     max_nws_disagreement_f: float = 4.0
     max_market_disagreement_f: float = 2.5   # |market-implied mean − model mean|; larger → skip and log
+    max_market_disagreement_c: float = 1.5
+    hourly_max_delta_c: float = -0.5         # hourly max vs true max, Celsius stations
+    max_intl_model_spread_c: float = 1.5     # max spread between ECMWF/GEFS/ICON ensemble means (no NBM abroad)
+    openmeteo_extra_sigma_f: float = 1.0
+    openmeteo_extra_sigma_c: float = 0.6
     max_bulletin_age_h: float = 7.5
 
     # Venues / credentials
     kalshi_series: tuple[str, ...] = KALSHI_DAILY_HIGH_SERIES
+    polymarket_international: bool = True       # trade non-US Polymarket cities (Celsius, Open-Meteo-only model)
+    polymarket_intl_cities: tuple[str, ...] = ()  # empty = all cities that settle on weather.gov hourly data
     polymarket_cities: tuple[str, ...] = ("nyc", "chicago", "dallas", "denver", "houston", "atlanta", "seattle",
                                           "san-francisco", "los-angeles", "miami", "austin")
     kalshi_api_key: str | None = Field(default=None, repr=False)
@@ -82,6 +89,7 @@ class Settings(BaseSettings):
     # Storage
     db_path: Path = PROJECT_ROOT / "data" / "weather_bot.sqlite"
     kill_file: Path = PROJECT_ROOT / "data" / ".trading_disabled"
+    stations_cache: Path = PROJECT_ROOT / "data" / "stations_cache.json"
 
     @field_validator("polymarket_trading_until", mode="before")
     @classmethod
@@ -93,6 +101,9 @@ class Settings(BaseSettings):
 
     def polymarket_allowed_on(self, day: dt.date) -> bool:
         return self.polymarket_trading_until is None or day <= self.polymarket_trading_until
+
+    def max_market_disagreement(self, unit: str) -> float:
+        return self.max_market_disagreement_c if unit == "C" else self.max_market_disagreement_f
 
     def max_basket_cost(self, venue: str) -> float:
         return {"kalshi": self.max_basket_cost_kalshi, "polymarket": self.max_basket_cost_polymarket}[venue]

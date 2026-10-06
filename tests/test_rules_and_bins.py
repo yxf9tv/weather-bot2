@@ -104,3 +104,28 @@ def test_polymarket_fee_and_min_qty():
     assert polymarket_min_qty(0.15, marketable=True) == 7      # ceil(1/0.15)=7 > 5
     assert polymarket_min_qty(0.50, marketable=True) == 5
     assert polymarket_min_qty(0.01, marketable=True) == 100
+
+
+@pytest.mark.unit
+def test_celsius_single_degree_and_tail_labels():
+    assert (parse_bin_label("18°C", "x").lo, parse_bin_label("18°C", "x").hi) == (18, 18)
+    assert parse_bin_label("17°C or below", "x").hi == 17 and parse_bin_label("17°C or below", "x").lo is None
+    assert parse_bin_label("27°C or higher", "x").lo == 27
+
+
+@pytest.mark.unit
+def test_polymarket_celsius_rules_parse_without_station_table():
+    desc = ("This market will resolve to the temperature range that contains the highest temperature recorded by NOAA "
+            "at the Incheon Intl Airport Station in degrees Celsius on 7 Oct '26.\n\nThis market will resolve off of "
+            "the Hourly Data provided using the \"Show Hourly Data\" button.")
+    r = parse_polymarket_rules(desc, "https://www.weather.gov/wrh/timeseries?site=rksi",
+                               "highest-temperature-in-seoul-on-october-7-2026")
+    assert r.confident and r.station_icao == "RKSI" and r.unit == "C" and r.quantity == "hourly_max"
+
+
+@pytest.mark.unit
+def test_polymarket_rules_reject_non_noaa_source():
+    desc = "This market will resolve based on the highest temperature recorded in the 'Daily Observations' table on Weather Underground"
+    r = parse_polymarket_rules(desc, "https://www.wunderground.com/history/daily/tw/taipei/RCSS",
+                               "highest-temperature-in-taipei-on-october-7-2026")
+    assert not r.confident

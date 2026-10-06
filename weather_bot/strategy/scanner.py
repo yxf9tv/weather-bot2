@@ -69,13 +69,13 @@ async def evaluate_market(market: WeatherMarket, venue: Venue, svc: ForecastServ
     best = None
     if reason is None:
         fc = svc.forecast(market.station_icao, market.target_date)
-        dists = svc.distributions(fc, market.quantity)
-        reason = forecast_gate(fc, dists, now, settings)
-        if reason is None and dists.nbm is not None:
-            reason = market_gate_vs_model(market, dists.nbm.mean, settings)
-    if reason is None and dists and dists.nbm:
+        dists = svc.distributions(fc, market.quantity, market.unit)
+        reason = forecast_gate(fc, dists, now, settings, market.unit)
+        if reason is None and dists.primary is not None:
+            reason = market_gate_vs_model(market, dists.primary.mean, settings)
+    if reason is None and dists and dists.primary:
         books = await fetch_books(venue, market, db)
-        probs = dists.nbm.bin_probabilities(market.bins)
+        probs = dists.primary.bin_probabilities(market.bins)
         candidates: list[BasketEval] = []
         rejected: list[str] = []
         for rng in contiguous_ranges(market.sorted_bins(), settings.min_bins, settings.max_bins):
@@ -111,10 +111,12 @@ def _log(db: Database, m: WeatherMarket, fc, dists, best: BasketEval | None, dec
         "dist_nbm": json.dumps(dists.nbm.as_dict()) if dists and dists.nbm else None,
         "dist_openmeteo": json.dumps(dists.openmeteo.as_dict()) if dists and dists.openmeteo else None,
         "nws_max": fc.nws_max if fc else None,
-        "confidence": json.dumps({"nbm_sd": fc.nbm.sd, "nbm_cycle": fc.nbm.cycle.isoformat(),
-                                  "market_mean": market_implied_mean(m),
-                                  "model_mean": round(dists.nbm.mean, 2) if dists and dists.nbm else None})
-        if fc and fc.nbm else None,
+        "confidence": json.dumps({"nbm_sd": fc.nbm.sd if fc.nbm else None,
+                                  "nbm_cycle": fc.nbm.cycle.isoformat() if fc.nbm else None,
+                                  "model_spread": fc.ensemble.model_spread() if fc.ensemble else None,
+                                  "market_mean": market_implied_mean(m), "unit": m.unit,
+                                  "model_mean": round(dists.primary.mean, 2) if dists and dists.primary else None})
+        if fc else None,
     }
     if best:
         row.update(best.as_row())

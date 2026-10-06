@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from ..markets.station_lookup import load_cache
 from ..markets.stations import STATIONS
 from ..storage.db import Database
 from ..weather import truth as truth_mod
@@ -25,6 +26,9 @@ def _winning_bin(bins: list[dict], value: int) -> dict | None:
 async def score_pending(db: Database, client: httpx.AsyncClient, now: dt.datetime | None = None) -> int:
     """For each (venue, market_key) with opportunities whose target day is over and no settlement row: fetch truth."""
     now = now or dt.datetime.now(dt.timezone.utc)
+    from ..config import load_settings
+
+    load_cache(load_settings().stations_cache)
     rows = db.conn.execute(
         "SELECT DISTINCT o.venue, o.market_key, o.station, o.target_date, o.quantity FROM opportunities o "
         "LEFT JOIN settlements s ON s.market_key = o.market_key WHERE s.id IS NULL").fetchall()
@@ -50,7 +54,8 @@ async def score_pending(db: Database, client: httpx.AsyncClient, now: dt.datetim
                 if t is None or t.value is None:
                     continue
             else:
-                t = await truth_mod.polymarket_truth(client, st.icao, target, st.tz)
+                t = await truth_mod.polymarket_truth(client, st.icao, target, st.tz, st.unit,
+                                                     hourly_filter=(st.unit == "F"))
                 if t.value is None or t.status == "partial":
                     continue
         except httpx.HTTPError as exc:

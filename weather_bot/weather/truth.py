@@ -60,26 +60,30 @@ async def iem_cli_daily_max(client: httpx.AsyncClient, station: str, date: dt.da
     return Truth(station, date, "cli_max", None, "missing", "iem_cli", {})
 
 
-def hourly_max_from_obs(obs: list[tuple[dt.datetime, float]], date: dt.date, tz: str) -> tuple[int | None, int]:
-    """Apply the weather.gov page rules: keep obs whose minute is 51–59 or 0–4, local clock day, round each to
-    whole °F, take the max. Returns (max, n_obs_used)."""
+def hourly_max_from_obs(obs: list[tuple[dt.datetime, float]], date: dt.date, tz: str,
+                        hourly_filter: bool = True) -> tuple[int | None, int]:
+    """weather.gov page rules: local clock day; with hourly_filter keep only obs at minute 51–59 or 0–4
+    (the "Show Hourly Data" view used by US markets); otherwise every observation counts. Round each to a
+    whole degree, take the max. Returns (max, n_obs_used)."""
     zone = ZoneInfo(tz)
     vals = []
-    for ts, temp_f in obs:
+    for ts, temp in obs:
         local = ts.astimezone(zone)
         if local.date() != date:
             continue
-        if not (local.minute >= 51 or local.minute <= 4):
+        if hourly_filter and not (local.minute >= 51 or local.minute <= 4):
             continue
-        vals.append(int(round(temp_f)))
+        vals.append(int(round(temp)))
     return (max(vals) if vals else None), len(vals)
 
 
-async def iem_metar_obs(client: httpx.AsyncClient, station: str, date: dt.date, tz: str) -> list[tuple[dt.datetime, float]]:
-    """Routine + special METAR temps (°F) covering the local day, from IEM (UTC window with a day of slack)."""
+async def iem_metar_obs(client: httpx.AsyncClient, station: str, date: dt.date, tz: str,
+                        unit: str = "F") -> list[tuple[dt.datetime, float]]:
+    """Routine + special METAR temps (°F or °C) covering the local day, from IEM (UTC window with a day of slack)."""
     start = dt.datetime.combine(date, dt.time(0, 0), tzinfo=ZoneInfo(tz)).astimezone(dt.timezone.utc)
     end = start + dt.timedelta(hours=30) + dt.timedelta(days=1)  # IEM's day2 is an exclusive 00:00Z boundary
-    params = {"station": station[1:] if station.startswith("K") else station, "data": "tmpf",
+    params = {"station": station[1:] if (station.startswith("K") and len(station) == 4 and unit == "F") else station,
+              "data": "tmpc" if unit == "C" else "tmpf",
               "year1": start.year, "month1": start.month, "day1": start.day,
               "year2": end.year, "month2": end.month, "day2": end.day,
               "tz": "UTC", "format": "onlycomma", "latlon": "no", "report_type": "3,4"}
@@ -95,8 +99,9 @@ async def iem_metar_obs(client: httpx.AsyncClient, station: str, date: dt.date, 
     return out
 
 
-async def polymarket_truth(client: httpx.AsyncClient, station: str, date: dt.date, tz: str) -> Truth:
-    obs = await iem_metar_obs(client, station, date, tz)
-    value, n = hourly_max_from_obs(obs, date, tz)
+async def polymarket_truth(client: httpx.AsyncClient, station: str, date: dt.date, tz: str, unit: str = "F",
+                           hourly_filter: bool = True) -> Truth:
+    obs = await iem_metar_obs(client, station, date, tz, unit)
+    value, n = hourly_max_from_obs(obs, date, tz, hourly_filter)
     status = "derived" if value is not None and n >= 18 else ("partial" if value is not None else "missing")
-    return Truth(station, date, "hourly_max", value, status, "iem_metar_hourly", {"n_obs": n})
+    return Truth(station, date, "hourly_max", value, status, "iem_metar_hourly", {"n_obs": n, "unit": unit})

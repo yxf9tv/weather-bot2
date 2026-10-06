@@ -19,6 +19,7 @@ class Station:
     lon: float
     tz: str
     cli_id: str | None  # NWS CLI product id (e.g. CLINYC) when a CLI exists
+    unit: str = "F"     # settlement unit used by markets on this station
 
 
 STATIONS: dict[str, Station] = {

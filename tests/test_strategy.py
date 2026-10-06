@@ -99,3 +99,21 @@ def test_market_implied_mean_and_gate():
     assert 77.5 < mkt < 78.5
     assert "market disagrees" in market_gate_vs_model(m, 75.0, S)
     assert market_gate_vs_model(m, 77.0, S) is None
+
+
+@pytest.mark.unit
+def test_international_forecast_gate_uses_model_spread():
+    import datetime as dt
+    from weather_bot.strategy.filters import forecast_gate
+    from weather_bot.weather.openmeteo import EnsembleDay
+    from weather_bot.weather.service import Distributions, StationForecast
+    from weather_bot.weather.distribution import from_members
+    now = dt.datetime(2026, 10, 6, 12, tzinfo=dt.timezone.utc)
+    agree = EnsembleDay("RKSI", dt.date(2026, 10, 7), now, {"gfs": [20.0, 21.0], "ecmwf": [20.5, 21.5], "icon": [21.0]}, "C")
+    fc = StationForecast("RKSI", dt.date(2026, 10, 7), None, agree, None, now)
+    d = Distributions(None, from_members(agree.all_members(), bias_f=-0.5, extra_sigma_f=0.6))
+    assert forecast_gate(fc, d, now, S, "C") is None
+    split = EnsembleDay("RKSI", dt.date(2026, 10, 7), now, {"gfs": [18.0, 18.5], "ecmwf": [21.0, 21.5]}, "C")
+    fc2 = StationForecast("RKSI", dt.date(2026, 10, 7), None, split, None, now)
+    assert "models disagree" in forecast_gate(fc2, d, now, S, "C")
+    assert "no ensemble" in forecast_gate(StationForecast("RKSI", dt.date(2026, 10, 7), None, None, None, now), Distributions(None, None), now, S, "C")

@@ -74,9 +74,9 @@ class App:
         for m, venue in sorted(markets, key=lambda mv: (mv[0].target_date, mv[0].venue, mv[0].station_icao)):
             opp = await evaluate_market(m, venue, self.svc, self.db, self.settings, now)
             opps.append(opp)
-            if opp.dists and opp.dists.nbm and m.rules.confident:
+            if opp.dists and opp.dists.primary and m.rules.confident:
                 # Model fair value per leg (uncapped). A resting bid above this is no longer +EV -> re-quote.
-                probs = opp.dists.nbm.bin_probabilities(m.bins)
+                probs = opp.dists.primary.bin_probabilities(m.bins)
                 fair_bids[m.key] = {b.instrument_id: probs[b.label] for b in m.bins}
         await self.quoter.refresh(now, fair_bids)
         await self._place_new(opps, now)
