@@ -27,6 +27,7 @@ class App:
     dry: bool
     score_hour_utc: int = 14  # 10am ET: Weather Company 'official' values and West-coast hourly obs are all in
     venue_disabled_until: dict[str, dt.datetime] = None  # type: ignore[assignment]
+    _last_skip: dict[str, str] = None  # type: ignore[assignment]
     venue_abort_streak: dict[str, int] = None  # type: ignore[assignment]
     _markets: list[tuple[WeatherMarket, Venue]] | None = None
     _markets_at: dt.datetime | None = None
@@ -109,6 +110,7 @@ class App:
 
     async def _place_new(self, opps: list[Opportunity], now: dt.datetime) -> None:
         tripped = self.kill.is_tripped()
+        self._last_skip = self._last_skip or {}
         quotable = [o for o in opps if o.decision == "quote" and o.best is not None]
         if tripped:
             for o in quotable:
@@ -125,8 +127,12 @@ class App:
             snap = snapshot(self.db, now)
             why = allows(o.best.cost, o.market.key, o.market.venue, snap, self.settings, now)
             if why:
-                self.db.add_event("info", "skip", f"{o.market.key}: {why}")
+                short = why.split(" (")[0]
+                if self._last_skip.get(o.market.key) != short:  # one event per change of reason, not per minute
+                    self.db.add_event("info", "skip", f"{o.market.key}: {why}")
+                    self._last_skip[o.market.key] = short
                 continue
+            self._last_skip.pop(o.market.key, None)
             basket_id = await self.quoter.place_basket(o.venue, o.market.key, o.best, o.opportunity_id, now)
             if basket_id is not None:
                 row = self.db.conn.execute("SELECT status FROM baskets WHERE id=?", (basket_id,)).fetchone()

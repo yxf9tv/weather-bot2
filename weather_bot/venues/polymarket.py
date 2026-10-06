@@ -209,8 +209,18 @@ class PolymarketVenue:
         oid = str(resp.get("orderID") or resp.get("orderId") or "")
         status = (resp.get("status") or "live").lower()
         st = {"matched": "filled", "live": "resting", "delayed": "resting"}.get(status, status)
-        filled = float(resp.get("takingAmount") or 0) if st == "filled" else 0.0
-        return OrderResult(oid, st, filled, None, resp)
+        if ioc and oid:
+            # A FAK may fill only part of its size; the post response does not say how much. Read it back.
+            try:
+                o = await asyncio.to_thread(lambda: self._sdk().get_order(oid))
+                matched = float(o.get("size_matched") or 0)
+                avg = _f(o.get("price"))
+                if matched <= 0:
+                    return OrderResult(oid, "cancelled", 0.0, None, {**resp, "order": o})
+                return OrderResult(oid, "filled" if matched >= qty - 1e-6 else "partial", matched, avg, {**resp, "order": o})
+            except Exception as exc:
+                return OrderResult(oid, "unknown", 0.0, None, {**resp, "error": str(exc)})
+        return OrderResult(oid, st, 0.0, None, resp)
 
     async def cancel(self, order_id: str) -> None:
         import asyncio
