@@ -193,14 +193,20 @@ class KalshiVenue:
         return _order_result(payload.get("order", payload), qty)
 
     async def cancel(self, order_id: str) -> None:
-        await self._send("DELETE", f"/portfolio/orders/{order_id}", None)
+        status, payload = await self._send("DELETE", f"/portfolio/events/orders/{order_id}", None)
+        if status not in (200, 204):
+            raise RuntimeError(f"cancel {order_id} failed: HTTP {status} {payload}")
 
     async def order_status(self, order_id: str) -> OrderResult:
-        status, payload = await self._send("GET", f"/portfolio/orders/{order_id}", None)
-        if status != 200:
-            return OrderResult(order_id, "unknown", 0.0, None, {"http_status": status, **payload})
-        order = payload.get("order", payload)
-        return _order_result(order, _f(order.get("initial_count_fp") or order.get("initial_count")) or 0.0)
+        import asyncio
+
+        for attempt in range(4):  # the order read is eventually consistent right after placement
+            status, payload = await self._send("GET", f"/portfolio/orders/{order_id}", None)
+            if status == 200:
+                order = payload.get("order", payload)
+                return _order_result(order, _f(order.get("initial_count_fp") or order.get("initial_count")) or 0.0)
+            await asyncio.sleep(0.5 * (attempt + 1))
+        return OrderResult(order_id, "unknown", 0.0, None, {"http_status": status, **payload})
 
     async def positions(self) -> list[dict]:
         data = await self._get("/portfolio/positions", {"limit": 200}, auth=True)

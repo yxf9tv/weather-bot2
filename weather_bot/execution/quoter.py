@@ -199,12 +199,22 @@ class Quoter:
         for r in rows:
             try:
                 await venue.cancel(r["venue_order_id"])
-                res = await venue.order_status(r["venue_order_id"])
-                if res.status == "unknown":
-                    res = OrderResult(r["venue_order_id"], "cancelled", 0.0, None, {})
-                self._update_order(r["id"], res)
             except Exception as exc:
                 self.db.add_event("error", "cancel", f"order {r['venue_order_id']}: {exc!r}")
+                continue
+            # Status reads are eventually consistent right after a cancel: poll briefly, then trust the cancel.
+            res = None
+            for _ in range(3):
+                res = await venue.order_status(r["venue_order_id"])
+                if res.status in ("cancelled", "filled", "partial"):
+                    break
+                await asyncio.sleep(0.4)
+            if res is None or res.status in ("resting", "unknown"):
+                res = OrderResult(r["venue_order_id"], "cancelled", res.filled_qty if res else 0.0,
+                                  res.avg_fill_price if res else None, res.raw if res else {})
+            elif res.status == "partial":
+                res = OrderResult(res.order_id, "cancelled", res.filled_qty, res.avg_fill_price, res.raw)
+            self._update_order(r["id"], res)
 
     def _update_order(self, row_id: int, res: OrderResult) -> None:
         self.db.conn.execute(

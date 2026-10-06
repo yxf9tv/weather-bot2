@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     # Storage
     db_path: Path = PROJECT_ROOT / "data" / "weather_bot.sqlite"
     kill_file: Path = PROJECT_ROOT / "data" / ".trading_disabled"
+
+    @field_validator("polymarket_trading_until", mode="before")
+    @classmethod
+    def _parse_us_date(cls, v):
+        if isinstance(v, str) and "/" in v:
+            m, d, y = v.strip().split("/")
+            return dt.date(int(y), int(m), int(d))
+        return v
 
     def polymarket_allowed_on(self, day: dt.date) -> bool:
         return self.polymarket_trading_until is None or day <= self.polymarket_trading_until
