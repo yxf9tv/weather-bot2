@@ -1,0 +1,25 @@
+[project]
+name = "weather-bot"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "cryptography>=50.0.2",
+    "httpx>=0.28.1",
+    "py-clob-client-v2>=1.2.0",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+markers = ["unit: fast tests with no network"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
