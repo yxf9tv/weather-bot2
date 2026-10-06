@@ -80,6 +80,6 @@ def test_sizing_kalshi_one_dollar_cap():
 @pytest.mark.unit
 def test_sizing_polymarket_floor_and_cap():
     v = PolymarketVenue(S, client=None)
-    assert basket_qty(v, [0.21, 0.21, 0.13], 5.00) == 8.0   # ceil(1/0.13)=8 shares each → $4.40
-    assert basket_qty(v, [0.21, 0.21, 0.13], 3.00) is None  # 8 × 0.55 = 4.40 > 3
-    assert basket_qty(v, [0.30, 0.30, 0.30], 5.00) == 5.0   # 5-share floor → $4.50
+    assert basket_qty(v, [0.21, 0.21, 0.13], 5.00) == 5.0   # resting bids: 5-share floor → $2.75
+    assert basket_qty(v, [0.21, 0.21, 0.13], 2.00) is None  # 5 × 0.55 = 2.75 > 2
+    assert basket_qty(v, [0.30, 0.30, 0.30], 5.00) == 5.0   # $4.50

@@ -100,6 +100,7 @@ def test_kalshi_fee_rounds_up_to_cent():
 @pytest.mark.unit
 def test_polymarket_fee_and_min_qty():
     assert polymarket_taker_fee(0.15, 10) == pytest.approx(0.06375, abs=1e-5)
-    assert polymarket_min_qty(0.15) == 7     # ceil(1/0.15)=7 > 5
-    assert polymarket_min_qty(0.50) == 5     # 5 shares, $2.50 notional
-    assert polymarket_min_qty(0.01) == 100
+    assert polymarket_min_qty(0.15) == 5                       # resting bid: 5-share floor only
+    assert polymarket_min_qty(0.15, marketable=True) == 7      # ceil(1/0.15)=7 > 5
+    assert polymarket_min_qty(0.50, marketable=True) == 5
+    assert polymarket_min_qty(0.01, marketable=True) == 100

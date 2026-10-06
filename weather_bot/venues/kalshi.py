@@ -170,7 +170,7 @@ class KalshiVenue:
     def maker_fee(self, price: float, qty: float) -> float:
         return 0.0
 
-    def min_qty(self, price: float) -> float:
+    def min_qty(self, price: float, marketable: bool = False) -> float:
         return 1.0
 
     # ---------- trading (V2 order API) ----------

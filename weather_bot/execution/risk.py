@@ -12,12 +12,16 @@ from ..storage.db import Database
 OPEN_STATUSES = ("resting", "partial", "complete", "completing", "unwinding")
 
 
+ABORT_COOLDOWN_MIN = 30
+
+
 @dataclass(frozen=True)
 class RiskSnapshot:
     open_risk: float
     risk_today: float
     exposure_by_key: dict[str, float]
     open_baskets_by_key: dict[str, int]
+    recently_aborted_keys: frozenset[str] = frozenset()
 
 
 def _basket_cost(row) -> float:
@@ -38,7 +42,11 @@ def snapshot(db: Database, now: dt.datetime) -> RiskSnapshot:
     day_start = now.astimezone(dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     today_rows = db.conn.execute("SELECT * FROM baskets WHERE created_ts >= ? AND status NOT IN ('aborted','expired')",
                                  (day_start,)).fetchall()
-    return RiskSnapshot(open_risk, sum(_basket_cost(r) for r in today_rows), exposure, count)
+    since = (now - dt.timedelta(minutes=ABORT_COOLDOWN_MIN)).isoformat()
+    aborted = db.conn.execute("SELECT DISTINCT market_key FROM baskets WHERE status='aborted' AND created_ts >= ?",
+                              (since,)).fetchall()
+    return RiskSnapshot(open_risk, sum(_basket_cost(r) for r in today_rows), exposure, count,
+                        frozenset(r["market_key"] for r in aborted))
 
 
 class KillSwitch:
@@ -81,6 +89,8 @@ def allows(ev_cost: float, market_key: str, venue: str, snap: RiskSnapshot, sett
         return "polymarket disabled by date flag"
     if snap.open_baskets_by_key.get(market_key, 0) > 0:
         return "already_exposed"
+    if market_key in snap.recently_aborted_keys:
+        return f"aborted within the last {ABORT_COOLDOWN_MIN} min"
     if snap.exposure_by_key.get(market_key, 0.0) + ev_cost > settings.max_city_date_exposure + 1e-9:
         return "city/date exposure cap"
     if snap.risk_today + ev_cost > settings.max_daily_new_risk + 1e-9:

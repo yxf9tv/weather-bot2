@@ -151,7 +151,8 @@ class Quoter:
             cost_complete = filled_cost + sum(a * (qty - l.filled_qty) for a, l in zip(asks, remaining))
             fees = sum(venue.taker_fee(a, qty - l.filled_qty) for a, l in zip(asks, remaining))
             net = prob - cost_complete / qty - fees / qty
-            if net >= self.settings.min_net_edge:
+            floor_ok = all((qty - l.filled_qty) >= venue.min_qty(a, marketable=True) for a, l in zip(asks, remaining))
+            if net >= self.settings.min_net_edge and floor_ok:
                 await self._cancel_open_legs(venue, b["id"])
                 for a, l in zip(asks, remaining):
                     leg = Leg(_bin_stub(l), l.prob, None, a, None, a)

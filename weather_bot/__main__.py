@@ -47,6 +47,8 @@ async def cmd_run(args) -> int:
     from .app import App
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     settings = load_settings()
     app = App.build(settings, dry=args.dry)
     live = settings.live_trading and not args.dry

@@ -42,7 +42,7 @@ class FakeVenue:
     def maker_fee(self, p, q):
         return 0.0
 
-    def min_qty(self, p):
+    def min_qty(self, p, marketable=False):
         return 1.0
 
     async def place_limit(self, iid, price, qty, *, side="buy", post_only=True, ioc=False, client_id):

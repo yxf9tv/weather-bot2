@@ -25,9 +25,11 @@ def polymarket_taker_fee(price: float, qty: float, rate: float = 0.05) -> float:
     return round(rate * qty * price * (1.0 - price), 5)
 
 
-def polymarket_min_qty(price: float, min_shares: float = 5.0, min_notional: float = 1.0) -> float:
-    """Exchange floor: >= 5 shares and >= $1 notional for a marketable BUY. Whole shares."""
-    if price <= 0:
+def polymarket_min_qty(price: float, *, marketable: bool = False, min_shares: float = 5.0,
+                       min_notional: float = 1.0) -> float:
+    """Exchange floor: >= 5 shares always; >= $1 notional only for a marketable BUY (verified live 2026-10-06:
+    a resting 5-share bid at $0.01 was accepted). Whole shares."""
+    if price <= 0 or not marketable:
         return min_shares
     return float(max(min_shares, math.ceil(min_notional / price)))
 
@@ -126,8 +128,8 @@ class PolymarketVenue:
     def maker_fee(self, price: float, qty: float) -> float:
         return 0.0
 
-    def min_qty(self, price: float) -> float:
-        return polymarket_min_qty(price)
+    def min_qty(self, price: float, marketable: bool = False) -> float:
+        return polymarket_min_qty(price, marketable=marketable)
 
     # ---------- trading ----------
     def _sdk(self):
@@ -173,7 +175,9 @@ class PolymarketVenue:
     async def cancel(self, order_id: str) -> None:
         import asyncio
 
-        await asyncio.to_thread(lambda: self._sdk().cancel(order_id))
+        resp = await asyncio.to_thread(lambda: self._sdk().cancel_orders([order_id]))
+        if isinstance(resp, dict) and resp.get("not_canceled"):
+            raise RuntimeError(f"cancel {order_id} failed: {resp['not_canceled']}")
 
     async def order_status(self, order_id: str) -> OrderResult:
         import asyncio

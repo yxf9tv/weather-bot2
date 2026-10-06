@@ -54,4 +54,4 @@ uv run pytest
 | Dallas | CLIDFW | KDAL Love Field |
 | Denver | CLIDEN | KBKF Buckley |
 | Fees | taker 0.07·C·P(1−P) rounded up; maker 0 | taker 0.05·C·p(1−p); maker 0 + 25% rebate |
-| Min order | 1 contract | 5 shares and ≥$1 |
+| Min order | 1 contract | 5 shares (≥$1 only for marketable orders) |

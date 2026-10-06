@@ -64,3 +64,13 @@ def test_kill_switch_trips_after_three_errors(db, tmp_path):
     ks.record_ok()
     s2 = settings(tmp_path, trading_enabled=False)
     assert KillSwitch(s2, db).is_tripped() == "TRADING_ENABLED=false"
+
+
+@pytest.mark.unit
+def test_recent_abort_cooldown(db, tmp_path):
+    s = settings(tmp_path)
+    add_basket(db, "polymarket:KLGA:2026-10-07:hourly_max", "aborted", 4.96, created=NOW - dt.timedelta(minutes=5))
+    add_basket(db, "polymarket:KSEA:2026-10-07:hourly_max", "aborted", 3.45, created=NOW - dt.timedelta(minutes=45))
+    snap = snapshot(db, NOW)
+    assert "aborted" in allows(4.96, "polymarket:KLGA:2026-10-07:hourly_max", "polymarket", snap, s, NOW)
+    assert allows(3.45, "polymarket:KSEA:2026-10-07:hourly_max", "polymarket", snap, s, NOW) is None

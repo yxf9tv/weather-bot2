@@ -26,6 +26,8 @@ class App:
     quoter: Quoter
     kill: KillSwitch
     dry: bool
+    venue_disabled_until: dict[str, dt.datetime] = None  # type: ignore[assignment]
+    venue_abort_streak: dict[str, int] = None  # type: ignore[assignment]
     _markets: list[tuple[WeatherMarket, Venue]] | None = None
     _markets_at: dt.datetime | None = None
 
@@ -88,13 +90,31 @@ class App:
                 self.db.add_event("info", "skip", f"{o.market.key}: kill switch ({tripped})")
             return
         quotable.sort(key=lambda o: -(o.best.prob * o.best.net_edge_maker))
+        self.venue_disabled_until = self.venue_disabled_until or {}
+        self.venue_abort_streak = self.venue_abort_streak or {}
         for o in quotable:
+            until = self.venue_disabled_until.get(o.market.venue)
+            if until and now < until:
+                self.db.add_event("info", "skip", f"{o.market.key}: venue {o.market.venue} disabled until {until:%H:%MZ}")
+                continue
             snap = snapshot(self.db, now)
             why = allows(o.best.cost, o.market.key, o.market.venue, snap, self.settings, now)
             if why:
                 self.db.add_event("info", "skip", f"{o.market.key}: {why}")
                 continue
-            await self.quoter.place_basket(o.venue, o.market.key, o.best, o.opportunity_id, now)
+            basket_id = await self.quoter.place_basket(o.venue, o.market.key, o.best, o.opportunity_id, now)
+            if basket_id is not None:
+                row = self.db.conn.execute("SELECT status FROM baskets WHERE id=?", (basket_id,)).fetchone()
+                venue = o.market.venue
+                if row and row["status"] == "aborted":
+                    streak = self.venue_abort_streak.get(venue, 0) + 1
+                    self.venue_abort_streak[venue] = streak
+                    if streak >= 3:
+                        self.venue_disabled_until[venue] = now + dt.timedelta(hours=6)
+                        self.db.add_event("critical", "venue", f"{venue}: {streak} consecutive aborted baskets; "
+                                                                f"no new quotes on this venue for 6h")
+                else:
+                    self.venue_abort_streak[venue] = 0
 
     def close(self) -> None:
         self.db.close()
