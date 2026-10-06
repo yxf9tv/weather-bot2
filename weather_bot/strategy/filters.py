@@ -16,8 +16,10 @@ def market_implied_mean(m: WeatherMarket) -> float | None:
     for b in m.sorted_bins():
         if b.yes_bid is None and b.yes_ask is None:
             return None
-        mid = (b.yes_bid or 0.0 + (b.yes_ask or 0.0)) / 2 if (b.yes_bid is not None and b.yes_ask is not None) \
-            else (b.yes_ask if b.yes_ask is not None else b.yes_bid)
+        if b.yes_bid is not None and b.yes_ask is not None:
+            mid = (b.yes_bid + b.yes_ask) / 2
+        else:
+            mid = b.yes_ask if b.yes_ask is not None else b.yes_bid
         if b.lo is None and b.hi is None:
             return None
         centre = (b.hi - 1.0) if b.lo is None else ((b.lo + 1.0) if b.hi is None else (b.lo + b.hi) / 2)
