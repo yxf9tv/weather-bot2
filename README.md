@@ -32,6 +32,15 @@ uv run python -m weather_bot enable-trading
 uv run pytest
 ```
 
+## International cities (Polymarket)
+
+About 36 non-US cities settle on the weather.gov hourly page in Celsius with 1°C bins. The bot resolves each
+station's coordinates and time zone once (`data/stations_cache.json`), models them with the Open-Meteo ensemble
+only (no NBM abroad) plus a measured +0.9°C bias, and gates on disagreement between the ECMWF, GEFS and ICON
+means (`MAX_INTL_MODEL_SPREAD_C`) and on market disagreement (`MAX_MARKET_DISAGREEMENT_C`). Truth counts every
+observation of the local day (US markets count only top-of-hour observations). `verify-truth` covers them.
+Toggle with `POLYMARKET_INTERNATIONAL=false` or restrict with `POLYMARKET_INTL_CITIES=["seoul","tokyo"]`.
+
 ## Selection knobs
 
 - `MAX_MARKET_DISAGREEMENT_F` (default 2.5): skip when the market-implied mean sits further than this from the

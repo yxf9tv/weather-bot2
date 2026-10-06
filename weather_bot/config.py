@@ -61,10 +61,10 @@ class Settings(BaseSettings):
     max_nws_disagreement_f: float = 4.0
     max_market_disagreement_f: float = 2.5   # |market-implied mean − model mean|; larger → skip and log
     max_market_disagreement_c: float = 1.5
-    hourly_max_delta_c: float = -0.5         # hourly max vs true max, Celsius stations
+    intl_ensemble_bias_c: float = 0.9        # observed daily max − Open-Meteo day-1 max (16 intl airports, Oct 3–5 2026)
     max_intl_model_spread_c: float = 1.5     # max spread between ECMWF/GEFS/ICON ensemble means (no NBM abroad)
     openmeteo_extra_sigma_f: float = 1.0
-    openmeteo_extra_sigma_c: float = 0.6
+    openmeteo_extra_sigma_c: float = 1.0     # residual sd of that bias check was ~1.4°C
     max_bulletin_age_h: float = 7.5
 
     # Venues / credentials

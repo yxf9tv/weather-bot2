@@ -142,8 +142,8 @@ class ForecastService:
         om = None
         if fc.ensemble and fc.ensemble.all_members():
             if unit == "C":
-                om_offset = s.hourly_max_delta_c if quantity == "hourly_max" else 0.0
-                om = from_members(fc.ensemble.all_members(), bias_f=om_offset, inflation=1.4,
+                # International truth counts every observation, so no hourly-max discount; apply measured model bias.
+                om = from_members(fc.ensemble.all_members(), bias_f=s.intl_ensemble_bias_c, inflation=1.4,
                                   extra_sigma_f=s.openmeteo_extra_sigma_c)
             else:
                 om_offset = s.hourly_max_delta_f if quantity == "hourly_max" else 0.0
