@@ -33,12 +33,14 @@ def test_snapshot_and_caps(db, tmp_path):
     add_basket(db, "kalshi:KNYC:2026-10-07:cli_max", "resting", 0.70)
     add_basket(db, "kalshi:KMDW:2026-10-07:cli_max", "complete", 0.60, filled=0.58)
     add_basket(db, "kalshi:KMIA:2026-10-07:cli_max", "expired", 0.90)
+    add_basket(db, "kalshi:KBOS:2026-10-08:cli_max", "held", 2.00, filled=0.05)
     snap = snapshot(db, NOW)
-    assert snap.open_risk == pytest.approx(0.70 + 0.58)
-    assert snap.risk_today == pytest.approx(0.70 + 0.58)
+    assert snap.open_risk == pytest.approx(0.70 + 0.58 + 0.05)
+    assert snap.risk_today == pytest.approx(0.70 + 0.58 + 0.05)
     assert allows(0.5, "kalshi:KNYC:2026-10-07:cli_max", "kalshi", snap, s, NOW) == "already_exposed"
     assert allows(0.5, "kalshi:KBOS:2026-10-07:cli_max", "kalshi", snap, s, NOW) is None
     assert "daily" in allows(4.0, "kalshi:KBOS:2026-10-07:cli_max", "kalshi", snap, s, NOW)
+    assert allows(0.5, "kalshi:KBOS:2026-10-08:cli_max", "kalshi", snap, s, NOW) == "already_exposed"
 
 
 @pytest.mark.unit

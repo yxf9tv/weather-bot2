@@ -156,11 +156,26 @@ class Quoter:
                 await self._resolve_partial(venue, b, legs, filled_cost, fair, now)
         elif status == "unwinding":
             sells = [l for l in legs if l.status != "cancelled" and self._order_side(l.order_row_id) == "sell"]
+            unwind_started = dt.datetime.fromisoformat(b["updated_ts"] or b["created_ts"])
+            unwind_min = (now - unwind_started).total_seconds() / 60
             if sells and all(l.status == "filled" for l in sells):
                 self._set_status(b["id"], "unwound", filled_cost=filled_cost)
-            elif age_min >= self.settings.basket_complete_timeout_min + self.settings.unwind_ttl_min:
+            elif unwind_min >= self.settings.unwind_ttl_min:
                 await self._cancel_open_legs(venue, b["id"])
-                self._set_status(b["id"], "partial", notes="held after unwind attempt")
+                # Last try: sell at the bid if the loss per share is small; otherwise hold to settlement.
+                sold_any = False
+                for l in [l for l in legs if l.filled_qty > 0 and self._order_side(l.order_row_id) == "buy"]:
+                    try:
+                        bk = await venue.orderbook(l.instrument_id)
+                    except Exception:
+                        continue
+                    paid = l.avg_fill_price or l.bid
+                    if bk.best_bid is not None and bk.best_bid >= paid - self.settings.max_unwind_loss_per_leg:
+                        leg = Leg(_bin_stub(l), l.prob, bk.best_bid, None, None, bk.best_bid)
+                        await self._place_leg(venue, b["id"], leg, l.filled_qty, side="sell", price=bk.best_bid, ioc=True)
+                        sold_any = True
+                self._set_status(b["id"], "unwinding" if sold_any else "held",
+                                 notes="sold at bid" if sold_any else "held to settlement after unwind attempt")
 
     async def _resolve_partial(self, venue: Venue, b, legs: list[LegState], filled_cost: float,
                                fair: dict[str, float] | None = None, now: dt.datetime | None = None) -> None:

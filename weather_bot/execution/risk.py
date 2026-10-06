@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from ..config import Settings
 from ..storage.db import Database
 
-OPEN_STATUSES = ("resting", "partial", "complete", "completing", "unwinding")
+OPEN_STATUSES = ("resting", "partial", "complete", "completing", "unwinding", "held")
 
 
 ABORT_COOLDOWN_MIN = 30
@@ -25,8 +25,10 @@ class RiskSnapshot:
 
 
 def _basket_cost(row) -> float:
-    if row["status"] in ("complete", "partial", "completing", "unwinding"):
-        return float(row["filled_cost"] or 0.0) + (float(row["intended_cost"] or 0.0) if row["status"] == "partial" else 0.0)
+    """Money at risk: resting/partial = the full basket if everything fills; complete/completing/unwinding/held =
+    what has actually been paid."""
+    if row["status"] in ("complete", "completing", "unwinding", "held"):
+        return float(row["filled_cost"] or 0.0)
     return float(row["intended_cost"] or 0.0)
 
 
