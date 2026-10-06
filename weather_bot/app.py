@@ -117,6 +117,13 @@ class App:
                 self.db.add_event("info", "skip", f"{o.market.key}: kill switch ({tripped})")
             return
         quotable.sort(key=lambda o: -(o.best.prob * o.best.net_edge_maker))
+        # Free balance per venue, read once per cycle; a basket must fit in what is actually available.
+        free: dict[str, float] = {}
+        for name, venue in self.venues.items():
+            try:
+                free[name] = await venue.balance()
+            except Exception as exc:
+                self.db.add_event("warn", "balance", f"{name}: {exc!r}")
         self.venue_disabled_until = self.venue_disabled_until or {}
         self.venue_abort_streak = self.venue_abort_streak or {}
         for o in quotable:
@@ -126,6 +133,11 @@ class App:
                 continue
             snap = snapshot(self.db, now)
             why = allows(o.best.cost, o.market.key, o.market.venue, snap, self.settings, now)
+            bal = free.get(o.market.venue)
+            if why is None and bal is not None and o.best.cost > bal - self.settings.balance_buffer:
+                why = f"insufficient free balance (${bal:.2f} on {o.market.venue})"
+            if why is None and bal is not None:
+                free[o.market.venue] = bal - o.best.cost
             if why:
                 short = why.split(" (")[0]
                 if self._last_skip.get(o.market.key) != short:  # one event per change of reason, not per minute

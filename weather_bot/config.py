@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     max_city_date_exposure: float = 5.00
     max_daily_new_risk: float = 5.00
     max_total_open_risk: float = 10.00
+    balance_buffer: float = 1.00             # keep this much free cash on each venue
     max_slippage_per_bin: float = 0.01
     max_unwind_loss_per_leg: float = 0.03
     min_unwind_recovery: float = 0.6        # sell a filled leg at the bid only if bid >= 60% of what we paid
