@@ -68,7 +68,7 @@ class PolymarketVenue:
     def build_market(self, ev: dict) -> WeatherMarket | None:
         slug = ev.get("slug", "")
         m = _SLUG_RE.match(slug)
-        if not m or m["city"] not in POLYMARKET_CITY_STATION:
+        if not m or m["city"] not in POLYMARKET_CITY_STATION or m["city"] not in self.settings.polymarket_cities:
             return None
         rows = ev.get("markets") or []
         if not rows:

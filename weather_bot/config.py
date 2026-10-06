@@ -59,10 +59,13 @@ class Settings(BaseSettings):
     max_nbp_sd_f: float = 4.0
     max_model_disagreement_f: float = 3.0
     max_nws_disagreement_f: float = 4.0
+    max_market_disagreement_f: float = 2.5   # |market-implied mean − model mean|; larger → skip and log
     max_bulletin_age_h: float = 7.5
 
     # Venues / credentials
     kalshi_series: tuple[str, ...] = KALSHI_DAILY_HIGH_SERIES
+    polymarket_cities: tuple[str, ...] = ("nyc", "chicago", "dallas", "denver", "houston", "atlanta", "seattle",
+                                          "san-francisco", "los-angeles", "miami", "austin")
     kalshi_api_key: str | None = Field(default=None, repr=False)
     kalshi_private_key_path: Path = Path("kalshi.pk")
     kalshi_host: str = "https://api.elections.kalshi.com/trade-api/v2"

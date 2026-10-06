@@ -32,6 +32,14 @@ uv run python -m weather_bot enable-trading
 uv run pytest
 ```
 
+## Selection knobs
+
+- `MAX_MARKET_DISAGREEMENT_F` (default 2.5): skip when the market-implied mean sits further than this from the
+  model mean. Skipped cases are logged with reason "market disagrees" so the data can show who was right.
+- `POLYMARKET_CITIES` (default all 11 US cities) and `KALSHI_SERIES`: restrict venues to chosen stations, e.g.
+  `POLYMARKET_CITIES=["miami","los-angeles","nyc"]` (JSON list) in `.env`.
+- `MAX_NBP_SD_F` (default 4): skip when NBM's own standard deviation for the day is wider than this.
+
 ## How a cycle works
 
 1. Discover open daily-high events on both venues; parse rules; cross-check station against the verified table.

@@ -6,7 +6,7 @@ from weather_bot.config import Settings
 from weather_bot.markets.model import Bin
 from weather_bot.strategy.baskets import contiguous_ranges, range_label
 from weather_bot.strategy.edge import evaluate, price_legs
-from weather_bot.strategy.filters import basket_gate
+from weather_bot.strategy.filters import basket_gate, market_gate_vs_model, market_implied_mean
 from weather_bot.strategy.sizing import basket_qty
 from weather_bot.venues.base import BookLevel, OrderBook
 from weather_bot.venues.kalshi import KalshiVenue
@@ -83,3 +83,19 @@ def test_sizing_polymarket_floor_and_cap():
     assert basket_qty(v, [0.21, 0.21, 0.13], 5.00) == 5.0   # resting bids: 5-share floor → $2.75
     assert basket_qty(v, [0.21, 0.21, 0.13], 2.00) is None  # 5 × 0.55 = 2.75 > 2
     assert basket_qty(v, [0.30, 0.30, 0.30], 5.00) == 5.0   # $4.50
+
+
+@pytest.mark.unit
+def test_market_implied_mean_and_gate():
+    import datetime as dt
+    from weather_bot.markets.model import RulesParse, WeatherMarket
+    bins = (Bin("73° or below", None, 73, "a", yes_bid=0.01, yes_ask=0.01),
+            Bin("74-75", 74, 75, "b", yes_bid=0.10, yes_ask=0.13), Bin("76-77", 76, 77, "c", yes_bid=0.28, yes_ask=0.29),
+            Bin("78-79", 78, 79, "d", yes_bid=0.35, yes_ask=0.37), Bin("80-81", 80, 81, "e", yes_bid=0.24, yes_ask=0.25),
+            Bin("82° or higher", 82, None, "f", yes_bid=0.006, yes_ask=0.007))
+    m = WeatherMarket("polymarket", "x", "Chicago", "KORD", dt.date(2026, 10, 7), "America/Chicago", "hourly_max", "F",
+                      RulesParse("KORD", "", dt.date(2026, 10, 7), "F", "hourly_max", "", True), bins)
+    mkt = market_implied_mean(m)
+    assert 77.5 < mkt < 78.5
+    assert "market disagrees" in market_gate_vs_model(m, 75.0, S)
+    assert market_gate_vs_model(m, 77.0, S) is None

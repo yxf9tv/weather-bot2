@@ -16,7 +16,7 @@ from ..venues.base import OrderBook, Venue
 from ..weather.service import Distributions, ForecastService, StationForecast
 from .baskets import contiguous_ranges
 from .edge import BasketEval, evaluate
-from .filters import basket_gate, forecast_gate, market_gate
+from .filters import basket_gate, forecast_gate, market_gate, market_gate_vs_model, market_implied_mean
 from .sizing import basket_qty
 
 
@@ -71,6 +71,8 @@ async def evaluate_market(market: WeatherMarket, venue: Venue, svc: ForecastServ
         fc = svc.forecast(market.station_icao, market.target_date)
         dists = svc.distributions(fc, market.quantity)
         reason = forecast_gate(fc, dists, now, settings)
+        if reason is None and dists.nbm is not None:
+            reason = market_gate_vs_model(market, dists.nbm.mean, settings)
     if reason is None and dists and dists.nbm:
         books = await fetch_books(venue, market, db)
         probs = dists.nbm.bin_probabilities(market.bins)
@@ -109,7 +111,10 @@ def _log(db: Database, m: WeatherMarket, fc, dists, best: BasketEval | None, dec
         "dist_nbm": json.dumps(dists.nbm.as_dict()) if dists and dists.nbm else None,
         "dist_openmeteo": json.dumps(dists.openmeteo.as_dict()) if dists and dists.openmeteo else None,
         "nws_max": fc.nws_max if fc else None,
-        "confidence": json.dumps({"nbm_sd": fc.nbm.sd, "nbm_cycle": fc.nbm.cycle.isoformat()}) if fc and fc.nbm else None,
+        "confidence": json.dumps({"nbm_sd": fc.nbm.sd, "nbm_cycle": fc.nbm.cycle.isoformat(),
+                                  "market_mean": market_implied_mean(m),
+                                  "model_mean": round(dists.nbm.mean, 2) if dists and dists.nbm else None})
+        if fc and fc.nbm else None,
     }
     if best:
         row.update(best.as_row())

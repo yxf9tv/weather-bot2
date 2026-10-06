@@ -10,6 +10,33 @@ from ..weather.service import Distributions, StationForecast
 from .edge import BasketEval
 
 
+def market_implied_mean(m: WeatherMarket) -> float | None:
+    """Mean of bin centres weighted by normalised mid-prices. Open tails use their edge ± 1°F."""
+    weights = []
+    for b in m.sorted_bins():
+        if b.yes_bid is None and b.yes_ask is None:
+            return None
+        mid = (b.yes_bid or 0.0 + (b.yes_ask or 0.0)) / 2 if (b.yes_bid is not None and b.yes_ask is not None) \
+            else (b.yes_ask if b.yes_ask is not None else b.yes_bid)
+        if b.lo is None and b.hi is None:
+            return None
+        centre = (b.hi - 1.0) if b.lo is None else ((b.lo + 1.0) if b.hi is None else (b.lo + b.hi) / 2)
+        weights.append((centre, max(mid, 0.0)))
+    total = sum(w for _, w in weights)
+    if total <= 0:
+        return None
+    return sum(c * w for c, w in weights) / total
+
+
+def market_gate_vs_model(m: WeatherMarket, model_mean: float, s: Settings) -> str | None:
+    mkt = market_implied_mean(m)
+    if mkt is None:
+        return None
+    if abs(mkt - model_mean) > s.max_market_disagreement_f:
+        return f"market disagrees (model {model_mean:.1f} vs market {mkt:.1f})"
+    return None
+
+
 def market_gate(m: WeatherMarket, now: dt.datetime, s: Settings) -> str | None:
     if not m.rules.confident:
         return "rules: " + "; ".join(m.rules.problems)
