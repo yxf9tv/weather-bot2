@@ -170,7 +170,10 @@ class Quoter:
                     except Exception:
                         continue
                     paid = l.avg_fill_price or l.bid
-                    if bk.best_bid is not None and bk.best_bid >= paid - self.settings.max_unwind_loss_per_leg:
+                    # Sell at the bid only if it recovers most of the cost; dumping a 5c leg for 0.1c is worse
+                    # than holding it to settlement at the model's probability.
+                    if (bk.best_bid is not None and bk.best_bid >= paid - self.settings.max_unwind_loss_per_leg
+                            and bk.best_bid >= self.settings.min_unwind_recovery * paid):
                         leg = Leg(_bin_stub(l), l.prob, bk.best_bid, None, None, bk.best_bid)
                         await self._place_leg(venue, b["id"], leg, l.filled_qty, side="sell", price=bk.best_bid, ioc=True)
                         sold_any = True

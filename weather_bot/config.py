@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     max_total_open_risk: float = 10.00
     max_slippage_per_bin: float = 0.01
     max_unwind_loss_per_leg: float = 0.03
+    min_unwind_recovery: float = 0.6        # sell a filled leg at the bid only if bid >= 60% of what we paid
     min_hours_to_target: float = 8.0
     max_hours_to_target: float = 48.0
 

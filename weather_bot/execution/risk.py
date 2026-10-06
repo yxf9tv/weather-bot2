@@ -29,6 +29,8 @@ def _basket_cost(row) -> float:
     what has actually been paid."""
     if row["status"] in ("complete", "completing", "unwinding", "held"):
         return float(row["filled_cost"] or 0.0)
+    if row["status"] in ("unwound", "expired", "aborted"):
+        return 0.0
     return float(row["intended_cost"] or 0.0)
 
 

@@ -34,6 +34,7 @@ def test_snapshot_and_caps(db, tmp_path):
     add_basket(db, "kalshi:KMDW:2026-10-07:cli_max", "complete", 0.60, filled=0.58)
     add_basket(db, "kalshi:KMIA:2026-10-07:cli_max", "expired", 0.90)
     add_basket(db, "kalshi:KBOS:2026-10-08:cli_max", "held", 2.00, filled=0.05)
+    add_basket(db, "kalshi:KSEA:2026-10-08:cli_max", "unwound", 2.00, filled=0.30)
     snap = snapshot(db, NOW)
     assert snap.open_risk == pytest.approx(0.70 + 0.58 + 0.05)
     assert snap.risk_today == pytest.approx(0.70 + 0.58 + 0.05)
