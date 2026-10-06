@@ -74,3 +74,17 @@ def test_recent_abort_cooldown(db, tmp_path):
     snap = snapshot(db, NOW)
     assert "aborted" in allows(4.96, "polymarket:KLGA:2026-10-07:hourly_max", "polymarket", snap, s, NOW)
     assert allows(3.45, "polymarket:KSEA:2026-10-07:hourly_max", "polymarket", snap, s, NOW) is None
+
+
+@pytest.mark.unit
+def test_score_due_once_per_day_after_hour(db, tmp_path):
+    from weather_bot.app import App
+
+    app = App.__new__(App)
+    app.db = db
+    app.score_hour_utc = 14
+    assert not app.score_due(dt.datetime(2026, 10, 6, 13, 59, tzinfo=dt.timezone.utc))
+    assert app.score_due(dt.datetime(2026, 10, 6, 14, 0, tzinfo=dt.timezone.utc))
+    db.set("last_score_date", "2026-10-06")
+    assert not app.score_due(dt.datetime(2026, 10, 6, 20, 0, tzinfo=dt.timezone.utc))
+    assert app.score_due(dt.datetime(2026, 10, 7, 15, 0, tzinfo=dt.timezone.utc))  # catch-up after a missed hour

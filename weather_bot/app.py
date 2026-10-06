@@ -25,6 +25,7 @@ class App:
     quoter: Quoter
     kill: KillSwitch
     dry: bool
+    score_hour_utc: int = 14  # 10am ET: Weather Company 'official' values and West-coast hourly obs are all in
     venue_disabled_until: dict[str, dt.datetime] = None  # type: ignore[assignment]
     venue_abort_streak: dict[str, int] = None  # type: ignore[assignment]
     _markets: list[tuple[WeatherMarket, Venue]] | None = None
@@ -79,7 +80,31 @@ class App:
                 fair_bids[m.key] = {b.instrument_id: probs[b.label] for b in m.bins}
         await self.quoter.refresh(now, fair_bids)
         await self._place_new(opps, now)
+        await self.maybe_score(now)
         return opps
+
+    def score_due(self, now: dt.datetime) -> bool:
+        """Once per UTC day, at or after score_hour_utc. Also catches up if the loop was down at that hour."""
+        last = self.db.get("last_score_date")
+        return now.hour >= self.score_hour_utc and last != now.date().isoformat()
+
+    async def maybe_score(self, now: dt.datetime) -> None:
+        if not self.score_due(now):
+            return
+        import httpx
+
+        from .scoring.settle import calibration_report, score_pending
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                n = await score_pending(self.db, client, now)
+        except Exception as exc:
+            self.db.add_event("error", "score", f"daily scoring failed: {exc!r}")
+            return
+        self.db.set("last_score_date", now.date().isoformat())
+        report = calibration_report(self.db)
+        self.db.add_event("info", "score", f"daily scoring: {n} market(s) settled", {"report": report})
+        print(f"[score] {n} market(s) settled\n{report}")
 
     async def _place_new(self, opps: list[Opportunity], now: dt.datetime) -> None:
         tripped = self.kill.is_tripped()

@@ -50,7 +50,8 @@ uv run pytest
    the ask. Size at the venue minimum within `MAX_BASKET_COST_<VENUE>`.
 4. Gate on range probability, net edge, model disagreement, NBM age, horizon, risk caps and the kill switch.
 5. Post GTC post-only bids for every leg. Re-quote on TTL or model move; resolve partial baskets after a timeout.
-6. Score finished days against the settlement source; print calibration buckets for NBM, Open-Meteo and the market.
+6. Once a day at 14:00Z the loop scores finished days against the settlement source and prints calibration buckets
+   for NBM, Open-Meteo and the market (`score --report` does the same on demand).
 
 ## Settlement facts (verified 2026-10-05)
 
