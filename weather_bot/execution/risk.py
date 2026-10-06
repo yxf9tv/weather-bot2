@@ -13,6 +13,7 @@ OPEN_STATUSES = ("resting", "partial", "complete", "completing", "unwinding", "h
 
 
 ABORT_COOLDOWN_MIN = 30
+UNWIND_COOLDOWN_MIN = 120  # do not re-quote a market right after dumping a partial fill there
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class RiskSnapshot:
     exposure_by_key: dict[str, float]
     open_baskets_by_key: dict[str, int]
     recently_aborted_keys: frozenset[str] = frozenset()
+    recently_unwound_keys: frozenset[str] = frozenset()
 
 
 def _basket_cost(row) -> float:
@@ -49,8 +51,11 @@ def snapshot(db: Database, now: dt.datetime) -> RiskSnapshot:
     since = (now - dt.timedelta(minutes=ABORT_COOLDOWN_MIN)).isoformat()
     aborted = db.conn.execute("SELECT DISTINCT market_key FROM baskets WHERE status='aborted' AND created_ts >= ?",
                               (since,)).fetchall()
+    since_unwind = (now - dt.timedelta(minutes=UNWIND_COOLDOWN_MIN)).isoformat()
+    unwound = db.conn.execute("SELECT DISTINCT market_key FROM baskets WHERE status IN ('unwound','held') AND "
+                              "COALESCE(updated_ts, created_ts) >= ?", (since_unwind,)).fetchall()
     return RiskSnapshot(open_risk, sum(_basket_cost(r) for r in today_rows), exposure, count,
-                        frozenset(r["market_key"] for r in aborted))
+                        frozenset(r["market_key"] for r in aborted), frozenset(r["market_key"] for r in unwound))
 
 
 class KillSwitch:
@@ -95,6 +100,8 @@ def allows(ev_cost: float, market_key: str, venue: str, snap: RiskSnapshot, sett
         return "already_exposed"
     if market_key in snap.recently_aborted_keys:
         return f"aborted within the last {ABORT_COOLDOWN_MIN} min"
+    if market_key in snap.recently_unwound_keys:
+        return f"unwound within the last {UNWIND_COOLDOWN_MIN} min"
     if snap.exposure_by_key.get(market_key, 0.0) + ev_cost > settings.max_city_date_exposure + 1e-9:
         return "city/date exposure cap"
     if snap.risk_today + ev_cost > settings.max_daily_new_risk + 1e-9:

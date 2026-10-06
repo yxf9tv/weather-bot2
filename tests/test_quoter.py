@@ -259,3 +259,59 @@ async def test_tail_fill_alone_unwinds_immediately(tmp_path):
     sells = [p for p in v.placed if p["side"] == "sell"]
     assert len(sells) == 1 and sells[0]["iid"] == "d"
     db.close()
+
+
+@pytest.mark.unit
+async def test_unwind_sells_only_net_position_and_ignores_rejected_sells(tmp_path):
+    """Regression: a rejected sell left the basket 'unwinding' forever; every TTL re-sold the leg → short 8."""
+    db = Database(tmp_path / "t5.sqlite")
+    s = Settings(_env_file=None, min_net_edge=0.10, min_resting_bid=0.0, basket_complete_timeout_min=0,
+                 unwind_ttl_min=30)
+    v = FakeVenue()
+    probs = {"63° to 64°": 0.45, "65° to 66°": 0.40, "67° to 68°": 0.03}
+    v.books = {"b": book("b", 0.30, 0.50), "c": book("c", 0.30, 0.50), "d": book("d", 0.01, 0.02)}
+    q = Quoter({"kalshi": v}, db, s, live=True)
+    ev = evaluate(BINS, probs, v.books, v, min_net_edge=0.10, qty=1.0)
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("d")
+    await q.refresh(NOW + dt.timedelta(minutes=1))                       # → unwinding, resting ask placed
+    db.conn.execute("UPDATE orders SET status='rejected' WHERE basket_id=? AND side='sell'", (bid,))  # e.g. 401
+    for o in v.orders.values():                                          # a rejected order never reached the book
+        if o["side"] == "sell":
+            o["status"] = "cancelled"
+    await q.refresh(NOW + dt.timedelta(minutes=32))                      # TTL → sell at bid (IOC)
+    v.fill("d")                                                          # the IOC sell fills
+    await q.refresh(NOW + dt.timedelta(minutes=33))
+    assert basket(db, bid)["status"] == "unwound"
+    await q.refresh(NOW + dt.timedelta(minutes=70))
+    await q.refresh(NOW + dt.timedelta(minutes=110))
+    sold = sum(p["qty"] for p in v.placed if p["side"] == "sell")
+    assert sold <= 2.0                                                   # 1 resting (rejected) + 1 IOC, never more
+    filled_sells = sum(o["filled"] for o in v.orders.values() if o["side"] == "sell")
+    assert filled_sells == pytest.approx(1.0)                            # net position is flat, not short
+    db.close()
+
+
+@pytest.mark.unit
+async def test_completion_counts_only_cost_beyond_reserved_budget(env):
+    db, s, v, q, ev = env
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("b")
+    v.fill("c")
+    v.books["d"] = book("d", 0.05, 0.08)  # completing costs 0.52 + 0.08 = 0.60 < intended cost already reserved
+    tight = Settings(_env_file=None, bid_ttl_min=30, basket_complete_timeout_min=120, min_net_edge=0.10,
+                     max_daily_new_risk=round(ev.cost + 0.01, 2), max_total_open_risk=round(ev.cost + 0.01, 2))
+    q2 = Quoter({"kalshi": v}, db, tight, live=True)
+    await q2.refresh(NOW + dt.timedelta(minutes=121))
+    assert basket(db, bid)["status"] == "completing"
+
+
+@pytest.mark.unit
+async def test_partial_fill_is_held_until_completion_timeout(env):
+    db, s, v, q, ev = env                      # basket_complete_timeout_min=120 in this fixture
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("c")
+    await q.refresh(NOW + dt.timedelta(minutes=1))
+    assert basket(db, bid)["status"] == "partial"
+    assert not [p for p in v.placed if p["side"] == "sell"]
+    assert Settings(_env_file=None).basket_complete_timeout_min >= 60   # default must not be 0 any more

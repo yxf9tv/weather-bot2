@@ -155,16 +155,24 @@ class Quoter:
             if age_min >= self.settings.basket_complete_timeout_min:
                 await self._resolve_partial(venue, b, legs, filled_cost, fair, now)
         elif status == "unwinding":
-            sells = [l for l in legs if l.status != "cancelled" and self._order_side(l.order_row_id) == "sell"]
+            # Sell exactly what we still hold: bought − already sold. A rejected or expired sell must never make us
+            # sell the same leg twice (that is how basket 118 went short 8 contracts on 2026-10-06).
+            remaining = self._net_positions(b["id"])
+            open_sells = [l for l in legs if l.status in ("resting", "partial", "sending")
+                          and self._order_side(l.order_row_id) == "sell"]
             unwind_started = dt.datetime.fromisoformat(b["updated_ts"] or b["created_ts"])
             unwind_min = (now - unwind_started).total_seconds() / 60
-            if sells and all(l.status == "filled" for l in sells):
+            if not remaining:
                 self._set_status(b["id"], "unwound", filled_cost=filled_cost)
-            elif unwind_min >= self.settings.unwind_ttl_min:
+            elif not open_sells or unwind_min >= self.settings.unwind_ttl_min:
                 await self._cancel_open_legs(venue, b["id"])
+                remaining = self._net_positions(b["id"])  # a cancel may have reported a late fill
                 # Last try: sell at the bid if the loss per share is small; otherwise hold to settlement.
                 sold_any = False
                 for l in [l for l in legs if l.filled_qty > 0 and self._order_side(l.order_row_id) == "buy"]:
+                    qty_left = remaining.get(l.instrument_id, 0.0)
+                    if qty_left <= 1e-9:
+                        continue
                     try:
                         bk = await venue.orderbook(l.instrument_id)
                     except Exception:
@@ -175,10 +183,14 @@ class Quoter:
                     if (bk.best_bid is not None and bk.best_bid >= paid - self.settings.max_unwind_loss_per_leg
                             and bk.best_bid >= self.settings.min_unwind_recovery * paid):
                         leg = Leg(_bin_stub(l), l.prob, bk.best_bid, None, None, bk.best_bid)
-                        await self._place_leg(venue, b["id"], leg, l.filled_qty, side="sell", price=bk.best_bid, ioc=True)
+                        await self._place_leg(venue, b["id"], leg, qty_left, side="sell", price=bk.best_bid, ioc=True)
+                        remaining[l.instrument_id] = 0.0  # one sell per leg per pass
                         sold_any = True
-                self._set_status(b["id"], "unwinding" if sold_any else "held",
-                                 notes="sold at bid" if sold_any else "held to settlement after unwind attempt")
+                if not self._net_positions(b["id"]):
+                    self._set_status(b["id"], "unwound", filled_cost=filled_cost)
+                else:
+                    self._set_status(b["id"], "unwinding" if sold_any else "held",
+                                     notes="sold at bid" if sold_any else "held to settlement after unwind attempt")
 
     async def _resolve_partial(self, venue: Venue, b, legs: list[LegState], filled_cost: float,
                                fair: dict[str, float] | None = None, now: dt.datetime | None = None) -> None:
@@ -210,8 +222,11 @@ class Quoter:
             net = prob - cost_complete / qty - fees / qty
             floor_ok = all((qty - l.filled_qty) >= venue.min_qty(a, marketable=True) for a, l in zip(asks, remaining))
             snap = snapshot(self.db, now or dt.datetime.now(dt.timezone.utc))
-            caps_ok = (snap.risk_today + extra_cost <= self.settings.max_daily_new_risk + 1e-9
-                       and snap.open_risk + extra_cost <= self.settings.max_total_open_risk + 1e-9)
+            # The snapshot already counts this partial basket at its full intended cost, so only the part of the
+            # completed cost that exceeds that reservation is new risk.
+            beyond_reserved = max(0.0, cost_complete - float(b["intended_cost"] or 0.0))
+            caps_ok = (snap.risk_today + beyond_reserved <= self.settings.max_daily_new_risk + 1e-9
+                       and snap.open_risk + beyond_reserved <= self.settings.max_total_open_risk + 1e-9)
             if net >= self.settings.min_net_edge and floor_ok and caps_ok:
                 await self._cancel_open_legs(venue, b["id"])
                 for a, l in zip(asks, remaining):
@@ -221,11 +236,14 @@ class Quoter:
                 return
         # Unwind filled legs with a resting ask one tick above cost.
         await self._cancel_open_legs(venue, b["id"])
-        filled = [l for l in legs if l.filled_qty > 0]
-        for l in filled:
+        remaining = self._net_positions(b["id"])
+        for l in [l for l in legs if l.filled_qty > 0 and self._order_side(l.order_row_id) == "buy"]:
+            qty_left = remaining.pop(l.instrument_id, 0.0)
+            if qty_left <= 1e-9:
+                continue
             paid = l.avg_fill_price or l.bid
             leg = Leg(_bin_stub(l), l.prob, None, None, None, paid)
-            await self._place_leg(venue, b["id"], leg, l.filled_qty, side="sell", price=round(paid + venue.tick, 4))
+            await self._place_leg(venue, b["id"], leg, qty_left, side="sell", price=round(paid + venue.tick, 4))
         self._set_status(b["id"], "unwinding", notes=("market gated; " if blocked else "") + "remaining legs not completed; unwinding fills")
 
     # ---------- helpers ----------
@@ -250,6 +268,15 @@ class Quoter:
         rows = self.db.conn.execute("SELECT * FROM orders WHERE basket_id=? AND side='buy'", (basket_id,)).fetchall()
         return [LegState(r["id"], r["instrument_id"], "", 0.0, r["venue_order_id"] or "", float(r["price"]),
                          float(r["qty"]), r["status"], float(r["filled_qty"] or 0), r["avg_fill_price"]) for r in rows]
+
+    def _net_positions(self, basket_id: int) -> dict[str, float]:
+        """instrument_id -> shares still held by this basket (buys filled − sells filled). Rejected orders count 0."""
+        rows = self.db.conn.execute(
+            "SELECT instrument_id, side, COALESCE(filled_qty, 0) AS f FROM orders WHERE basket_id=?", (basket_id,)).fetchall()
+        net: dict[str, float] = {}
+        for r in rows:
+            net[r["instrument_id"]] = net.get(r["instrument_id"], 0.0) + (float(r["f"]) if r["side"] == "buy" else -float(r["f"]))
+        return {k: v for k, v in net.items() if v > 1e-9}
 
     def _order_side(self, order_row_id: int) -> str:
         return self.db.conn.execute("SELECT side FROM orders WHERE id=?", (order_row_id,)).fetchone()["side"]

@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     taker_when_edge: bool = True          # lift all asks at once (FOK legs) when the taker basket still clears MIN_NET_EDGE
     min_resting_bid: float = 0.05         # legs priced below this are not rested; they are bought at completion
     bid_ttl_min: int = 30
-    basket_complete_timeout_min: int = 0  # evaluate completion as soon as any leg fills
+    basket_complete_timeout_min: int = 60  # hold a partial fill this long before completing/unwinding
     unwind_ttl_min: int = 30
 
     # Refresh cadence

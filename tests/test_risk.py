@@ -91,3 +91,14 @@ def test_score_due_once_per_day_after_hour(db, tmp_path):
     db.set("last_score_date", "2026-10-06")
     assert not app.score_due(dt.datetime(2026, 10, 6, 20, 0, tzinfo=dt.timezone.utc))
     assert app.score_due(dt.datetime(2026, 10, 7, 15, 0, tzinfo=dt.timezone.utc))  # catch-up after a missed hour
+
+
+@pytest.mark.unit
+def test_recent_unwind_cooldown(db, tmp_path):
+    from weather_bot.execution.risk import UNWIND_COOLDOWN_MIN
+    s = settings(tmp_path)
+    key = "kalshi:KLAX:2026-10-07:cli_max"
+    add_basket(db, key, "unwound", 0.70, filled=0.38, created=NOW - dt.timedelta(minutes=5))
+    assert allows(0.50, key, "kalshi", snapshot(db, NOW), s, NOW) == f"unwound within the last {UNWIND_COOLDOWN_MIN} min"
+    later = NOW + dt.timedelta(minutes=UNWIND_COOLDOWN_MIN + 1)
+    assert allows(0.50, key, "kalshi", snapshot(db, later), s, later) is None
