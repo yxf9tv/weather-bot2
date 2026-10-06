@@ -170,3 +170,27 @@ async def test_partial_then_completing_when_cheap_ask(env):
     assert b["status"] == "completing"
     lifts = [p for p in v.placed if p["ioc"]]
     assert len(lifts) == 1 and lifts[0]["iid"] == "d" and lifts[0]["price"] == 0.08
+
+
+@pytest.mark.unit
+async def test_partial_completion_blocked_when_market_gated(env):
+    db, s, v, q, ev = env
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("b")
+    v.fill("c")
+    v.books["d"] = book("d", 0.05, 0.08)  # cheap enough to complete...
+    await q.refresh(NOW + dt.timedelta(minutes=121), blocked_keys={"k"})  # ...but the market is gated
+    assert basket(db, bid)["status"] == "unwinding"
+    assert not [p for p in v.placed if p["ioc"]]
+
+
+@pytest.mark.unit
+async def test_partial_completion_uses_current_probabilities(env):
+    db, s, v, q, ev = env
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("b")
+    v.fill("c")
+    v.books["d"] = book("d", 0.05, 0.08)
+    # model collapsed: current probabilities make completion -EV even at a cheap ask
+    await q.refresh(NOW + dt.timedelta(minutes=121), fair_bids={"k": {"b": 0.10, "c": 0.10, "d": 0.05}})
+    assert basket(db, bid)["status"] == "unwinding"

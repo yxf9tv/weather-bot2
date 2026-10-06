@@ -91,8 +91,11 @@ class Quoter:
         return res
 
     # ---------- reconciliation ----------
-    async def refresh(self, now: dt.datetime, fair_bids: dict[str, dict[str, float]] | None = None) -> None:
-        """fair_bids: market_key -> {instrument_id: current model probability}. A resting bid above fair is cancelled."""
+    async def refresh(self, now: dt.datetime, fair_bids: dict[str, dict[str, float]] | None = None,
+                      blocked_keys: set[str] | None = None) -> None:
+        """fair_bids: market_key -> {instrument_id: current model probability}. A resting bid above fair is cancelled.
+        blocked_keys: markets the scanner currently gates (model/market disagreement): never complete those as taker."""
+        self._blocked = blocked_keys or set()
         rows = self.db.conn.execute(
             "SELECT * FROM baskets WHERE status IN ('resting','partial','completing','unwinding')").fetchall()
         for b in rows:
@@ -126,7 +129,7 @@ class Quoter:
                 return
             self._set_status(b["id"], "partial", filled_cost=filled_cost)
             if age_min >= self.settings.basket_complete_timeout_min:
-                await self._resolve_partial(venue, b, legs, filled_cost)
+                await self._resolve_partial(venue, b, legs, filled_cost, fair, now)
         elif status == "unwinding":
             sells = [l for l in legs if l.status != "cancelled" and self._order_side(l.order_row_id) == "sell"]
             if sells and all(l.status == "filled" for l in sells):
@@ -135,8 +138,12 @@ class Quoter:
                 await self._cancel_open_legs(venue, b["id"])
                 self._set_status(b["id"], "partial", notes="held after unwind attempt")
 
-    async def _resolve_partial(self, venue: Venue, b, legs: list[LegState], filled_cost: float) -> None:
-        """After the completion timeout: lift remaining asks if still +EV, else try to unwind, else hold."""
+    async def _resolve_partial(self, venue: Venue, b, legs: list[LegState], filled_cost: float,
+                               fair: dict[str, float] | None = None, now: dt.datetime | None = None) -> None:
+        """After the completion timeout: lift remaining asks if still +EV on CURRENT model probabilities, the market
+        is not gated, and risk caps allow; else try to unwind, else hold."""
+        from .risk import snapshot
+
         remaining = [l for l in legs if l.status in ("resting", "partial")]
         books = {}
         for l in remaining:
@@ -145,14 +152,20 @@ class Quoter:
             except Exception:
                 pass
         qty = float(b["qty"])
-        prob = sum(l.prob for l in legs if l.status != "cancelled")
+        active = [l for l in legs if l.status != "cancelled"]
+        prob = sum((fair or {}).get(l.instrument_id, l.prob) for l in active)
         asks = [books[l.instrument_id].best_ask for l in remaining if l.instrument_id in books]
-        if remaining and len(asks) == len(remaining) and all(a is not None for a in asks):
-            cost_complete = filled_cost + sum(a * (qty - l.filled_qty) for a, l in zip(asks, remaining))
+        blocked = b["market_key"] in getattr(self, "_blocked", set())
+        if remaining and not blocked and len(asks) == len(remaining) and all(a is not None for a in asks):
+            extra_cost = sum(a * (qty - l.filled_qty) for a, l in zip(asks, remaining))
+            cost_complete = filled_cost + extra_cost
             fees = sum(venue.taker_fee(a, qty - l.filled_qty) for a, l in zip(asks, remaining))
             net = prob - cost_complete / qty - fees / qty
             floor_ok = all((qty - l.filled_qty) >= venue.min_qty(a, marketable=True) for a, l in zip(asks, remaining))
-            if net >= self.settings.min_net_edge and floor_ok:
+            snap = snapshot(self.db, now or dt.datetime.now(dt.timezone.utc))
+            caps_ok = (snap.risk_today + extra_cost <= self.settings.max_daily_new_risk + 1e-9
+                       and snap.open_risk + extra_cost <= self.settings.max_total_open_risk + 1e-9)
+            if net >= self.settings.min_net_edge and floor_ok and caps_ok:
                 await self._cancel_open_legs(venue, b["id"])
                 for a, l in zip(asks, remaining):
                     leg = Leg(_bin_stub(l), l.prob, None, a, None, a)
@@ -166,7 +179,7 @@ class Quoter:
             paid = l.avg_fill_price or l.bid
             leg = Leg(_bin_stub(l), l.prob, None, None, None, paid)
             await self._place_leg(venue, b["id"], leg, l.filled_qty, side="sell", price=round(paid + venue.tick, 4))
-        self._set_status(b["id"], "unwinding", notes="remaining legs not +EV; unwinding fills")
+        self._set_status(b["id"], "unwinding", notes=("market gated; " if blocked else "") + "remaining legs not completed; unwinding fills")
 
     # ---------- helpers ----------
     async def _sync_legs(self, venue: Venue, basket_id: int) -> list[LegState]:

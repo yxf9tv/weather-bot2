@@ -78,7 +78,8 @@ class App:
                 # Model fair value per leg (uncapped). A resting bid above this is no longer +EV -> re-quote.
                 probs = opp.dists.primary.bin_probabilities(m.bins)
                 fair_bids[m.key] = {b.instrument_id: probs[b.label] for b in m.bins}
-        await self.quoter.refresh(now, fair_bids)
+        blocked = {o.market.key for o in opps if o.decision == "skip" and o.reason and "disagree" in o.reason}
+        await self.quoter.refresh(now, fair_bids, blocked)
         await self._place_new(opps, now)
         await self.maybe_score(now)
         return opps
