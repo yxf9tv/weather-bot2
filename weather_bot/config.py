@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # Quoting / execution
     taker_when_edge: bool = True          # lift all asks at once (FOK legs) when the taker basket still clears MIN_NET_EDGE
     min_resting_bid: float = 0.05         # legs priced below this are not rested; they are bought at completion
+    min_resting_bid_polymarket: float = 0.15  # Polymarket's $1 floor makes cheap stubs expensive to complete; defer them
     bid_ttl_min: int = 30
     basket_complete_timeout_min: int = 60  # hold a partial fill this long before completing/unwinding
     unwind_ttl_min: int = 30
@@ -108,6 +109,9 @@ class Settings(BaseSettings):
 
     def max_market_disagreement(self, unit: str) -> float:
         return self.max_market_disagreement_c if unit == "C" else self.max_market_disagreement_f
+
+    def min_resting_bid_for(self, venue: str) -> float:
+        return self.min_resting_bid_polymarket if venue == "polymarket" else self.min_resting_bid
 
     def max_basket_cost(self, venue: str) -> float:
         return {"kalshi": self.max_basket_cost_kalshi, "polymarket": self.max_basket_cost_polymarket}[venue]

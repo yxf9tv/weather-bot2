@@ -315,3 +315,35 @@ async def test_partial_fill_is_held_until_completion_timeout(env):
     assert basket(db, bid)["status"] == "partial"
     assert not [p for p in v.placed if p["side"] == "sell"]
     assert Settings(_env_file=None).basket_complete_timeout_min >= 60   # default must not be 0 any more
+
+
+@pytest.mark.unit
+async def test_completion_ignores_total_open_risk_cap(env):
+    """A partial basket's cost was approved when it was quoted; the open-risk cap must not strand it as a stub."""
+    db, s, v, q, ev = env
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("b")
+    v.fill("c")
+    v.books["d"] = book("d", 0.05, 0.08)
+    tight = Settings(_env_file=None, bid_ttl_min=30, basket_complete_timeout_min=120, min_net_edge=0.10,
+                     max_total_open_risk=0.10, max_daily_new_risk=30.0)   # open cap already blown
+    q2 = Quoter({"kalshi": v}, db, tight, live=True)
+    await q2.refresh(NOW + dt.timedelta(minutes=121))
+    assert basket(db, bid)["status"] == "completing"
+
+
+@pytest.mark.unit
+async def test_polymarket_rests_only_legs_at_or_above_its_own_floor(tmp_path):
+    db = Database(tmp_path / "t6.sqlite")
+    s = Settings(_env_file=None, min_net_edge=0.10, min_resting_bid=0.05, min_resting_bid_polymarket=0.15)
+    v = FakeVenue()
+    v.name = "polymarket"
+    probs = {"63° to 64°": 0.45, "65° to 66°": 0.40, "67° to 68°": 0.12}
+    v.books = {"b": book("b", 0.30, 0.50), "c": book("c", 0.30, 0.50), "d": book("d", 0.08, 0.12)}
+    q = Quoter({"polymarket": v}, db, s, live=True)
+    ev = evaluate(BINS, probs, v.books, v, min_net_edge=0.10, qty=5.0)
+    d_bid = next(l.bid_price for l in ev.legs if l.bin.instrument_id == "d")
+    assert 0.05 <= d_bid < 0.15, d_bid                       # would rest on Kalshi, must be deferred on Polymarket
+    await q.place_basket(v, "p", ev, None, NOW)
+    assert sorted(p["iid"] for p in v.placed) == ["b", "c"]
+    db.close()

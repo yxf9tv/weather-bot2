@@ -76,7 +76,7 @@ class Quoter:
                     return await self._place_leg(venue, basket_id, leg, ev.qty, price=leg.best_ask, ioc=True)
                 return await self._place_leg(venue, basket_id, leg, ev.qty)
 
-        legs_to_rest = [l for l in ev.legs if taker or l.bid_price >= self.settings.min_resting_bid]
+        legs_to_rest = [l for l in ev.legs if taker or l.bid_price >= self.settings.min_resting_bid_for(venue.name)]
         results = await asyncio.gather(*(_guarded(leg) for leg in legs_to_rest), return_exceptions=True)
         rejected = [r for r in results if isinstance(r, BaseException) or r.status in ("rejected", "unknown")]
         if rejected:
@@ -223,10 +223,11 @@ class Quoter:
             floor_ok = all((qty - l.filled_qty) >= venue.min_qty(a, marketable=True) for a, l in zip(asks, remaining))
             snap = snapshot(self.db, now or dt.datetime.now(dt.timezone.utc))
             # The snapshot already counts this partial basket at its full intended cost, so only the part of the
-            # completed cost that exceeds that reservation is new risk.
+            # completed cost that exceeds that reservation is new risk. Only the daily cap applies here: the total
+            # open-risk cap was checked when the basket was quoted, and stranding a partial fill as a stub is
+            # worse than finishing the range it was approved for.
             beyond_reserved = max(0.0, cost_complete - float(b["intended_cost"] or 0.0))
-            caps_ok = (snap.risk_today + beyond_reserved <= self.settings.max_daily_new_risk + 1e-9
-                       and snap.open_risk + beyond_reserved <= self.settings.max_total_open_risk + 1e-9)
+            caps_ok = snap.risk_today + beyond_reserved <= self.settings.max_daily_new_risk + 1e-9
             if net >= self.settings.min_net_edge and floor_ok and caps_ok:
                 await self._cancel_open_legs(venue, b["id"])
                 for a, l in zip(asks, remaining):
