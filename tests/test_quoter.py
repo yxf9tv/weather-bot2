@@ -347,3 +347,31 @@ async def test_polymarket_rests_only_legs_at_or_above_its_own_floor(tmp_path):
     await q.place_basket(v, "p", ev, None, NOW)
     assert sorted(p["iid"] for p in v.placed) == ["b", "c"]
     db.close()
+
+
+@pytest.mark.unit
+async def test_unwind_treats_sub_minimum_residue_as_flat(tmp_path):
+    """Polymarket filled a sell at 4.38 against a 4.39 buy; the 0.01 residue must not be re-sold every minute."""
+    db = Database(tmp_path / "t7.sqlite")
+    s = Settings(_env_file=None, min_net_edge=0.10, min_resting_bid=0.0, basket_complete_timeout_min=0,
+                 unwind_ttl_min=30)
+    v = FakeVenue()
+    v.min_qty = lambda p, marketable=False: 5.0           # Polymarket-like floor
+    probs = {"63° to 64°": 0.45, "65° to 66°": 0.40, "67° to 68°": 0.03}
+    v.books = {"b": book("b", 0.30, 0.50), "c": book("c", 0.30, 0.50), "d": book("d", 0.01, 0.02)}
+    q = Quoter({"kalshi": v}, db, s, live=True)
+    ev = evaluate(BINS, probs, v.books, v, min_net_edge=0.10, qty=5.0)
+    bid = await q.place_basket(v, "k", ev, None, NOW)
+    v.fill("d", 4.39)
+    await q.refresh(NOW + dt.timedelta(minutes=1))        # partial → unwinding, resting sell for 4.39
+    await q.refresh(NOW + dt.timedelta(minutes=32))       # TTL → sell at bid
+    for o in v.orders.values():                           # venue fills the IOC sell at 4.38 (rounding)
+        if o["side"] == "sell" and o["status"] in ("resting", "partial"):
+            o["filled"], o["status"] = 4.38, "filled"
+    await q.refresh(NOW + dt.timedelta(minutes=33))
+    assert basket(db, bid)["status"] in ("unwound", "held")
+    n_sells = len([p for p in v.placed if p["side"] == "sell"])
+    await q.refresh(NOW + dt.timedelta(minutes=70))
+    await q.refresh(NOW + dt.timedelta(minutes=110))
+    assert len([p for p in v.placed if p["side"] == "sell"]) == n_sells, "no dust sells"
+    db.close()

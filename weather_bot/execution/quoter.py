@@ -157,7 +157,7 @@ class Quoter:
         elif status == "unwinding":
             # Sell exactly what we still hold: bought − already sold. A rejected or expired sell must never make us
             # sell the same leg twice (that is how basket 118 went short 8 contracts on 2026-10-06).
-            remaining = self._net_positions(b["id"])
+            remaining = self._net_positions(b["id"], venue)
             open_sells = [l for l in legs if l.status in ("resting", "partial", "sending")
                           and self._order_side(l.order_row_id) == "sell"]
             unwind_started = dt.datetime.fromisoformat(b["updated_ts"] or b["created_ts"])
@@ -166,7 +166,7 @@ class Quoter:
                 self._set_status(b["id"], "unwound", filled_cost=filled_cost)
             elif not open_sells or unwind_min >= self.settings.unwind_ttl_min:
                 await self._cancel_open_legs(venue, b["id"])
-                remaining = self._net_positions(b["id"])  # a cancel may have reported a late fill
+                remaining = self._net_positions(b["id"], venue)  # a cancel may have reported a late fill
                 # Last try: sell at the bid if the loss per share is small; otherwise hold to settlement.
                 sold_any = False
                 for l in [l for l in legs if l.filled_qty > 0 and self._order_side(l.order_row_id) == "buy"]:
@@ -183,10 +183,10 @@ class Quoter:
                     if (bk.best_bid is not None and bk.best_bid >= paid - self.settings.max_unwind_loss_per_leg
                             and bk.best_bid >= self.settings.min_unwind_recovery * paid):
                         leg = Leg(_bin_stub(l), l.prob, bk.best_bid, None, None, bk.best_bid)
-                        await self._place_leg(venue, b["id"], leg, qty_left, side="sell", price=bk.best_bid, ioc=True)
+                        res = await self._place_leg(venue, b["id"], leg, qty_left, side="sell", price=bk.best_bid, ioc=True)
                         remaining[l.instrument_id] = 0.0  # one sell per leg per pass
-                        sold_any = True
-                if not self._net_positions(b["id"]):
+                        sold_any = sold_any or res.status not in ("rejected", "unknown")
+                if not self._net_positions(b["id"], venue):
                     self._set_status(b["id"], "unwound", filled_cost=filled_cost)
                 else:
                     self._set_status(b["id"], "unwinding" if sold_any else "held",
@@ -237,7 +237,7 @@ class Quoter:
                 return
         # Unwind filled legs with a resting ask one tick above cost.
         await self._cancel_open_legs(venue, b["id"])
-        remaining = self._net_positions(b["id"])
+        remaining = self._net_positions(b["id"], venue)
         for l in [l for l in legs if l.filled_qty > 0 and self._order_side(l.order_row_id) == "buy"]:
             qty_left = remaining.pop(l.instrument_id, 0.0)
             if qty_left <= 1e-9:
@@ -270,14 +270,17 @@ class Quoter:
         return [LegState(r["id"], r["instrument_id"], "", 0.0, r["venue_order_id"] or "", float(r["price"]),
                          float(r["qty"]), r["status"], float(r["filled_qty"] or 0), r["avg_fill_price"]) for r in rows]
 
-    def _net_positions(self, basket_id: int) -> dict[str, float]:
-        """instrument_id -> shares still held by this basket (buys filled − sells filled). Rejected orders count 0."""
+    def _net_positions(self, basket_id: int, venue: Venue | None = None) -> dict[str, float]:
+        """instrument_id -> shares still held by this basket (buys filled − sells filled). Rejected orders count 0.
+        Residue smaller than the venue's minimum order (e.g. 0.01 share after Polymarket rounds a fill) is treated
+        as flat: it cannot be sold, so chasing it would reject every cycle forever."""
         rows = self.db.conn.execute(
             "SELECT instrument_id, side, COALESCE(filled_qty, 0) AS f FROM orders WHERE basket_id=?", (basket_id,)).fetchall()
         net: dict[str, float] = {}
         for r in rows:
             net[r["instrument_id"]] = net.get(r["instrument_id"], 0.0) + (float(r["f"]) if r["side"] == "buy" else -float(r["f"]))
-        return {k: v for k, v in net.items() if v > 1e-9}
+        floor = venue.min_qty(0.5, marketable=False) if venue is not None else 0.0
+        return {k: v for k, v in net.items() if v > 1e-9 and v + 1e-9 >= floor}
 
     def _order_side(self, order_row_id: int) -> str:
         return self.db.conn.execute("SELECT side FROM orders WHERE id=?", (order_row_id,)).fetchone()["side"]
