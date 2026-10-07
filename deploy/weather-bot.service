@@ -1,0 +1,19 @@
+[Unit]
+Description=weather-bot-2 trading loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/home/bot/weather-bot2
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/bot/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/bot/.local/bin/uv run python -m weather_bot run
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/bot/weather-bot2/data/run.log
+StandardError=append:/home/bot/weather-bot2/data/run.log
+
+[Install]
+WantedBy=multi-user.target

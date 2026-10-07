@@ -252,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     vt.add_argument("date")
     sub.add_parser("disable-trading", help="kill switch on: stop opening new quotes")
     sub.add_parser("enable-trading", help="kill switch off")
+    sub.add_parser("probe", help="rest + cancel one tiny bid per venue to prove this machine/IP can trade")
     f = sub.add_parser("forecast", help="print forecast + distributions for one station/date")
     f.add_argument("station")
     f.add_argument("date")
@@ -276,6 +277,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_toggle(False)
     if args.cmd == "enable-trading":
         return cmd_toggle(True)
+    if args.cmd == "probe":
+        from .probe import run_probe
+
+        return asyncio.run(run_probe(load_settings()))
     return 1
 
 
