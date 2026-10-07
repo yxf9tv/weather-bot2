@@ -46,12 +46,30 @@ async def probe_venue(venue: Venue) -> tuple[bool, str]:
     return False, "no quotable bin found"
 
 
+async def polymarket_geoblock() -> dict:
+    """Polymarket's own IP check: {'blocked': bool, 'ip', 'country', 'region'}."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "Mozilla/5.0"}) as c:
+        r = await c.get("https://polymarket.com/api/geoblock")
+        r.raise_for_status()
+        return r.json()
+
+
 async def run_probe(settings: Settings) -> int:
     from .venues.kalshi import KalshiVenue
     from .venues.polymarket import PolymarketVenue
 
     print(f"probe at {dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}")
     ok_all = True
+    try:
+        g = await polymarket_geoblock()
+        print(f"polymarket geoblock: ip {g.get('ip')} country {g.get('country')} region {g.get('region')} "
+              f"blocked={g.get('blocked')}")
+        if g.get("blocked"):
+            ok_all = False
+    except Exception as exc:
+        print(f"polymarket geoblock check failed: {exc!r}")
     for venue in (KalshiVenue(settings), PolymarketVenue(settings)):
         try:
             bal = await venue.balance()
