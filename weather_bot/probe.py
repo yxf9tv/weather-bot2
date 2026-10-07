@@ -64,10 +64,10 @@ async def run_probe(settings: Settings) -> int:
     ok_all = True
     try:
         g = await polymarket_geoblock()
-        print(f"polymarket geoblock: ip {g.get('ip')} country {g.get('country')} region {g.get('region')} "
-              f"blocked={g.get('blocked')}")
-        if g.get("blocked"):
-            ok_all = False
+        # Informational only: this is the WEBSITE check. Countries that are close-only on the frontend (e.g. NL)
+        # report blocked=true here while the CLOB API still accepts orders. The order probe below is the verdict.
+        print(f"polymarket geoblock (website check): ip {g.get('ip')} country {g.get('country')} "
+              f"region {g.get('region')} blocked={g.get('blocked')}")
     except Exception as exc:
         print(f"polymarket geoblock check failed: {exc!r}")
     for venue in (KalshiVenue(settings), PolymarketVenue(settings)):

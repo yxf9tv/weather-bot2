@@ -4,7 +4,8 @@ Goal: run from an IP that both Polymarket (non-restricted country) and Kalshi ac
 database carried over. Stop the Mac copy before starting the droplet copy; two copies would double-quote.
 
 ## 1. Create the droplet
-- Region: **Amsterdam (AMS3)** or **Frankfurt (FRA1)**. Not London, not any US region.
+- Region: **Amsterdam (AMS3)**. Verified 2026-10-07: both venues PASS. Frankfurt is blocked by Polymarket's API
+  (Germany is close-only on the API). London, Toronto, Singapore, Sydney and all US regions are blocked too.
 - Image: Ubuntu 24.04 LTS. Size: Basic, regular CPU, 1 GB / 1 vCPU (the $6 one).
 - Authentication: SSH key. No password login.
 
