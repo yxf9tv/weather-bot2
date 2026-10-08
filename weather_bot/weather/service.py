@@ -16,6 +16,8 @@ from .distribution import Distribution, from_members, from_percentiles
 from .nbm import MaxTPercentiles, fetch_latest_nbp, parse_nbp
 from .openmeteo import EnsembleDay, fetch_ensemble
 
+OPENMETEO_BACKOFF_MIN = 15
+
 
 @dataclass(frozen=True)
 class StationForecast:
@@ -87,6 +89,10 @@ class ForecastService:
                 except httpx.HTTPError as exc:
                     if self.db:
                         self.db.add_event("warn", "openmeteo", f"{s.icao}: {exc!r}")
+                    # Back off: retry this station in OPENMETEO_BACKOFF_MIN, not next cycle. Re-requesting every
+                    # failed station every minute is what turned one 429 into a permanent rate limit.
+                    self._ensemble_at[s.icao] = (now - dt.timedelta(minutes=self.settings.openmeteo_refresh_min)
+                                                 + dt.timedelta(minutes=OPENMETEO_BACKOFF_MIN))
                     return
                 self._ensemble[s.icao] = {d.target_date: d for d in days}
                 self._ensemble_at[s.icao] = now

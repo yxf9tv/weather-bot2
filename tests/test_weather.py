@@ -93,3 +93,31 @@ def test_parse_nws_max_temps_buckets_by_local_date():
         {"validTime": "2026-10-07T12:00:00+00:00/PT13H", "value": 20.0}]}}}
     out = parse_max_temps(payload, "America/New_York")
     assert round(out[dt.date(2026, 10, 6)]) == 62 and out[dt.date(2026, 10, 7)] == 68
+
+
+@pytest.mark.unit
+async def test_ensemble_refresh_backs_off_after_http_error(monkeypatch):
+    """A failed Open-Meteo call (e.g. 429) must not be retried every cycle; the droplet hit 774 429s in 10 min."""
+    import httpx
+    from weather_bot.config import Settings
+    from weather_bot.markets.stations import Station
+    from weather_bot.weather import service as svc_mod
+
+    calls = []
+
+    async def failing(client, station, lat, lon, tz, api_key=None, **kw):
+        calls.append(station)
+        req = httpx.Request("GET", "https://ensemble-api.open-meteo.com/v1/ensemble")
+        raise httpx.HTTPStatusError("429", request=req, response=httpx.Response(429, request=req))
+
+    monkeypatch.setattr(svc_mod, "fetch_ensemble", failing)
+    s = Settings(_env_file=None, openmeteo_refresh_min=60)
+    svc = svc_mod.ForecastService(s, None)
+    st = Station("KNYC", "New York", 40.78, -73.97, "America/New_York", "CLINYC")
+    t0 = dt.datetime(2026, 10, 8, 12, tzinfo=dt.timezone.utc)
+    await svc.refresh_ensemble([st], t0)
+    await svc.refresh_ensemble([st], t0 + dt.timedelta(minutes=1))
+    await svc.refresh_ensemble([st], t0 + dt.timedelta(minutes=5))
+    assert calls == ["KNYC"], calls                      # one attempt, then backoff
+    await svc.refresh_ensemble([st], t0 + dt.timedelta(minutes=16))
+    assert calls == ["KNYC", "KNYC"]                     # retried after the backoff window
