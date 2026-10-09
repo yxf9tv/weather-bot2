@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     min_hours_to_target: float = 8.0
     max_hours_to_target: float = 48.0
 
+    # Live execution mode (2026-10-09 review): "taker" = live orders only buy a full range at the asks, under the
+    # live_* gates below; the resting-bid strategy keeps running as a paper shadow. "maker" = old resting-bid trading.
+    execution_mode: str = "taker"
+    live_max_hours_to_target: float = 36.0   # 36-49h horizon hit 50% in the first sweep
+    live_max_market_gap_f: float = 1.0       # |model mean − market-implied mean|; >1.5 hit 76% vs 97% below
+    live_max_market_gap_c: float = 1.0
+    live_max_ask_cost: float = 0.85          # Σasks + fees per $1 payout: leave ≥15c of room to move
+    log_throttle_min: int = 15               # store an unchanged book/opportunity at most this often
+
     # Quoting / execution
     taker_when_edge: bool = True          # lift all asks at once (FOK legs) when the taker basket still clears MIN_NET_EDGE
     min_resting_bid: float = 0.05         # legs priced below this are not rested; they are bought at completion
@@ -106,6 +115,9 @@ class Settings(BaseSettings):
 
     def polymarket_allowed_on(self, day: dt.date) -> bool:
         return self.polymarket_trading_until is None or day <= self.polymarket_trading_until
+
+    def live_max_market_gap(self, unit: str) -> float:
+        return self.live_max_market_gap_c if unit == "C" else self.live_max_market_gap_f
 
     def max_market_disagreement(self, unit: str) -> float:
         return self.max_market_disagreement_c if unit == "C" else self.max_market_disagreement_f

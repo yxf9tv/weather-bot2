@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS settlements (
   id INTEGER PRIMARY KEY, ts TEXT NOT NULL, venue TEXT NOT NULL, market_key TEXT NOT NULL UNIQUE,
   truth_value REAL, truth_source TEXT, venue_result TEXT, winning_bin TEXT, agree INTEGER, notes TEXT);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS shadow_baskets (
+  id INTEGER PRIMARY KEY, created_ts TEXT NOT NULL, updated_ts TEXT NOT NULL, venue TEXT NOT NULL,
+  market_key TEXT NOT NULL, label TEXT NOT NULL, prob REAL, qty REAL NOT NULL, legs TEXT NOT NULL,
+  status TEXT NOT NULL, notes TEXT);
+CREATE INDEX IF NOT EXISTS ix_shadow_key ON shadow_baskets(market_key, status);
 """
 
 
@@ -77,7 +82,15 @@ class Database:
              market.quantity, int(market.rules.confident), json.dumps(list(market.rules.problems)),
              hours_to_target, market.sum_of_asks(), json.dumps(bins), market.raw_rules_text))
 
-    def add_book(self, venue: str, book) -> None:
+    def add_book(self, venue: str, book, throttle_min: int = 15) -> None:
+        """Store a book only when the top of book changed, or every throttle_min (was every minute: 2 GB in 3 days)."""
+        top = (book.bids[0].price if book.bids else None, book.bids[0].size if book.bids else None,
+               book.asks[0].price if book.asks else None, book.asks[0].size if book.asks else None)
+        cache = self.__dict__.setdefault("_book_cache", {})
+        last = cache.get(book.instrument_id)
+        if last and last[0] == top and (book.fetched_at - last[1]).total_seconds() < throttle_min * 60:
+            return
+        cache[book.instrument_id] = (top, book.fetched_at)
         self.conn.execute("INSERT INTO books(ts, venue, instrument_id, bids, asks) VALUES (?,?,?,?,?)",
                           (book.fetched_at.isoformat(timespec="seconds"), venue, book.instrument_id,
                            json.dumps([[l.price, l.size] for l in book.bids]),

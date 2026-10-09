@@ -96,6 +96,10 @@ async def cmd_score(args) -> int:
         print(calibration_report(db))
         print()
         print(pnl_report(db))
+    print()
+    from .execution.shadow import shadow_report
+
+    print(shadow_report(db))
     db.close()
     return 0
 

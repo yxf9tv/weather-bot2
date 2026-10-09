@@ -49,26 +49,29 @@ class Quoter:
 
     # ---------- placement ----------
     async def place_basket(self, venue: Venue, market_key: str, ev: BasketEval, opportunity_id: int | None,
-                           now: dt.datetime | None = None) -> int | None:
-        """Post all legs concurrently. Returns basket id, or None when not live / rejected."""
+                           now: dt.datetime | None = None, *, taker_only: bool = False) -> int | None:
+        """Post all legs concurrently. Returns basket id, or None when not live / rejected / not takeable.
+        taker_only: buy the whole range at the asks or do nothing; never rest a bid."""
         created = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
-        if not self.live:
-            self.db.add_event("info", "dry-quote", f"{venue.name} {market_key} {ev.label} qty {ev.qty:g} "
-                                                   f"Σbid {ev.sum_bids:.3f} edge {ev.net_edge_maker:.3f}")
-            return None
-        cur = self.db.conn.execute(
-            "INSERT INTO baskets(created_ts, venue, market_key, opportunity_id, status, legs, intended_cost, filled_cost,"
-            " qty, updated_ts) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (created, venue.name, market_key, opportunity_id, "placing", legs_json(ev.legs), ev.cost, 0.0, ev.qty,
-             created))
-        basket_id = int(cur.lastrowid)
-        sem = asyncio.Semaphore(3)  # avoid bursting a venue's transport with every leg at once
-
         # Taker path: every ask is cheap enough that the whole basket still clears the edge → take it now.
         taker = (self.settings.taker_when_edge and ev.net_edge_taker is not None
                  and ev.net_edge_taker >= self.settings.min_net_edge
                  and all(l.best_ask is not None and (l.ask_size or 0) >= ev.qty for l in ev.legs)
                  and all(ev.qty >= venue.min_qty(l.best_ask, marketable=True) for l in ev.legs))  # type: ignore[arg-type]
+        if taker_only and not taker:
+            return None
+        if not self.live:
+            self.db.add_event("info", "dry-quote", f"{venue.name} {market_key} {ev.label} qty {ev.qty:g} "
+                                                   f"Σbid {ev.sum_bids:.3f} edge {ev.net_edge_maker:.3f}")
+            return None
+        intended = (ev.qty * (ev.sum_asks or 0.0) + (ev.taker_fee or 0.0)) if taker else ev.cost
+        cur = self.db.conn.execute(
+            "INSERT INTO baskets(created_ts, venue, market_key, opportunity_id, status, legs, intended_cost, filled_cost,"
+            " qty, updated_ts) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (created, venue.name, market_key, opportunity_id, "placing", legs_json(ev.legs), intended, 0.0, ev.qty,
+             created))
+        basket_id = int(cur.lastrowid)
+        sem = asyncio.Semaphore(3)  # avoid bursting a venue's transport with every leg at once
 
         async def _guarded(leg: Leg):
             async with sem:

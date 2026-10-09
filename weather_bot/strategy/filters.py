@@ -92,3 +92,35 @@ def basket_gate(ev: BasketEval, s: Settings) -> str | None:
     if any(l.bid_price >= (l.best_ask or 1.0) for l in ev.legs):
         return "bid would cross"
     return None
+
+
+def taker_cost_per_unit(ev: BasketEval) -> float | None:
+    """What one $1-payout unit of the range costs when every ask is lifted, fees included."""
+    if ev.sum_asks is None or ev.taker_fee is None or ev.qty <= 0:
+        return None
+    return ev.sum_asks + ev.taker_fee / ev.qty
+
+
+def taker_gate(ev: BasketEval, s: Settings) -> str | None:
+    """A range is buyable at the asks only with the model's edge AND room to move."""
+    if ev.prob < s.min_range_probability:
+        return f"range prob {ev.prob:.2f} < {s.min_range_probability}"
+    cost = taker_cost_per_unit(ev)
+    if cost is None or ev.net_edge_taker is None:
+        return "a leg has no ask"
+    if ev.net_edge_taker < s.min_net_edge - 1e-9:
+        return f"taker edge {ev.net_edge_taker:.3f} < {s.min_net_edge}"
+    if cost > s.live_max_ask_cost + 1e-9:
+        return f"ask cost {cost:.2f} > {s.live_max_ask_cost} (no room to move)"
+    return None
+
+
+def live_gate(hours: float, market_gap: float | None, unit: str, s: Settings) -> str | None:
+    """Stricter gates for live taker orders, on top of everything the scanner already checked."""
+    if hours > s.live_max_hours_to_target:
+        return f"live: {hours:.0f}h > {s.live_max_hours_to_target:.0f}h"
+    if market_gap is None:
+        return "live: no market-implied mean"
+    if market_gap > s.live_max_market_gap(unit) + 1e-9:
+        return f"live: model {market_gap:.1f} from market > {s.live_max_market_gap(unit)}"
+    return None

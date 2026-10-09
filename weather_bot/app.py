@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from .config import Settings
 from .execution.quoter import Quoter
 from .execution.risk import KillSwitch, allows, snapshot
+from .execution.shadow import ShadowBids
+from .strategy.filters import live_gate, taker_cost_per_unit
 from .markets.model import WeatherMarket
 from .storage.db import Database
 from .strategy.scanner import Opportunity, evaluate_market
@@ -81,6 +83,10 @@ class App:
                 fair_bids[m.key] = {b.instrument_id: probs[b.label] for b in m.bins}
         blocked = {o.market.key for o in opps if o.decision == "skip" and o.reason and "disagree" in o.reason}
         await self.quoter.refresh(now, fair_bids, blocked)
+        try:
+            ShadowBids(self.db, self.settings).update(opps, now)
+        except Exception as exc:  # paper bookkeeping must never stop trading
+            self.db.add_event("error", "shadow", repr(exc))
         await self._place_new(opps, now)
         await self.maybe_score(now)
         return opps
@@ -111,12 +117,34 @@ class App:
     async def _place_new(self, opps: list[Opportunity], now: dt.datetime) -> None:
         tripped = self.kill.is_tripped()
         self._last_skip = self._last_skip or {}
-        quotable = [o for o in opps if o.decision == "quote" and o.best is not None]
+        taker_mode = self.settings.execution_mode == "taker"
+        if taker_mode:
+            quotable = []
+            for o in opps:
+                if o.best_taker is None:
+                    continue
+                why = live_gate(o.hours, o.market_gap, o.market.unit, self.settings)
+                if why:
+                    if self._last_skip.get(o.market.key) != why.split(" ")[0] + why.split(" ")[-1]:
+                        self.db.add_event("info", "skip", f"{o.market.key}: {why}")
+                        self._last_skip[o.market.key] = why.split(" ")[0] + why.split(" ")[-1]
+                    continue
+                quotable.append(o)
+        else:
+            quotable = [o for o in opps if o.decision == "quote" and o.best is not None]
         if tripped:
             for o in quotable:
                 self.db.add_event("info", "skip", f"{o.market.key}: kill switch ({tripped})")
             return
-        quotable.sort(key=lambda o: -(o.best.prob * o.best.net_edge_maker))
+        def ev_of(o):
+            return o.best_taker if taker_mode else o.best
+
+        def cost_of(o):
+            ev = ev_of(o)
+            return ev.qty * (taker_cost_per_unit(ev) or 0.0) if taker_mode else ev.cost
+
+        quotable.sort(key=lambda o: -(ev_of(o).prob * ((ev_of(o).net_edge_taker or 0.0) if taker_mode
+                                                        else ev_of(o).net_edge_maker)))
         # Free balance per venue, read once per cycle; a basket must fit in what is actually available.
         free: dict[str, float] = {}
         for name, venue in self.venues.items():
@@ -132,12 +160,13 @@ class App:
                 self.db.add_event("info", "skip", f"{o.market.key}: venue {o.market.venue} disabled until {until:%H:%MZ}")
                 continue
             snap = snapshot(self.db, now)
-            why = allows(o.best.cost, o.market.key, o.market.venue, snap, self.settings, now)
+            cost = cost_of(o)
+            why = allows(cost, o.market.key, o.market.venue, snap, self.settings, now)
             bal = free.get(o.market.venue)
-            if why is None and bal is not None and o.best.cost > bal - self.settings.balance_buffer:
+            if why is None and bal is not None and cost > bal - self.settings.balance_buffer:
                 why = f"insufficient free balance (${bal:.2f} on {o.market.venue})"
             if why is None and bal is not None:
-                free[o.market.venue] = bal - o.best.cost
+                free[o.market.venue] = bal - cost
             if why:
                 short = why.split(" (")[0]
                 if self._last_skip.get(o.market.key) != short:  # one event per change of reason, not per minute
@@ -145,7 +174,8 @@ class App:
                     self._last_skip[o.market.key] = short
                 continue
             self._last_skip.pop(o.market.key, None)
-            basket_id = await self.quoter.place_basket(o.venue, o.market.key, o.best, o.opportunity_id, now)
+            basket_id = await self.quoter.place_basket(o.venue, o.market.key, ev_of(o), o.opportunity_id, now,
+                                                       taker_only=taker_mode)
             if basket_id is not None:
                 row = self.db.conn.execute("SELECT status FROM baskets WHERE id=?", (basket_id,)).fetchone()
                 venue = o.market.venue
