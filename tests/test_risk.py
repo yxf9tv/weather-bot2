@@ -102,3 +102,18 @@ def test_recent_unwind_cooldown(db, tmp_path):
     assert allows(0.50, key, "kalshi", snapshot(db, NOW), s, NOW) == f"unwound within the last {UNWIND_COOLDOWN_MIN} min"
     later = NOW + dt.timedelta(minutes=UNWIND_COOLDOWN_MIN + 1)
     assert allows(0.50, key, "kalshi", snapshot(db, later), s, later) is None
+
+
+@pytest.mark.unit
+def test_settled_markets_free_their_risk(db, tmp_path):
+    """Regression: held/complete baskets on settled markets kept $29.57 of a $30 cap forever (2026-10-10)."""
+    s = settings(tmp_path, max_total_open_risk=1.0, max_city_date_exposure=1.0)
+    key = "kalshi:KNYC:2026-10-07:cli_max"
+    add_basket(db, key, "held", 2.0, filled=0.90)
+    add_basket(db, "kalshi:KBOS:2026-10-07:cli_max", "complete", 1.0, filled=0.95)
+    assert snapshot(db, NOW).open_risk == pytest.approx(1.85)
+    db.conn.execute("INSERT INTO settlements(ts, venue, market_key, truth_value) VALUES (?,?,?,?)",
+                    (NOW.isoformat(), "kalshi", key, 73.0))
+    snap = snapshot(db, NOW)
+    assert snap.open_risk == pytest.approx(0.95)
+    assert snap.exposure_by_key.get(key, 0.0) == 0.0 and key not in snap.open_baskets_by_key

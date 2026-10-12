@@ -37,8 +37,10 @@ def _basket_cost(row) -> float:
 
 
 def snapshot(db: Database, now: dt.datetime) -> RiskSnapshot:
-    rows = db.conn.execute("SELECT * FROM baskets WHERE status IN (%s)" % ",".join("?" * len(OPEN_STATUSES)),
-                           OPEN_STATUSES).fetchall()
+    # A basket whose market has settled carries no risk any more (it has paid out or expired worthless).
+    rows = db.conn.execute("SELECT * FROM baskets WHERE status IN (%s) AND market_key NOT IN "
+                           "(SELECT market_key FROM settlements WHERE truth_value IS NOT NULL)"
+                           % ",".join("?" * len(OPEN_STATUSES)), OPEN_STATUSES).fetchall()
     open_risk = sum(_basket_cost(r) for r in rows)
     exposure: dict[str, float] = {}
     count: dict[str, int] = {}
