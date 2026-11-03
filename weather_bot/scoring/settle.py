@@ -134,7 +134,8 @@ def pnl_report(db: Database) -> str:
         cost = float(b["filled_cost"] or 0)
         payout = None
         if b["truth_value"] is not None:
-            payout = sum(qty for l in legs if _in_range({"lo": _lo(l), "hi": _hi(l)}, b["truth_value"], b["truth_value"]))
+            truth = b["truth_value"]
+            payout = sum(qty for l in legs if _in_range({"lo": truth, "hi": truth}, _lo(l), _hi(l)))
             total_cost += cost
             total_payout += payout
         lines.append(f"  #{b['id']} {b['venue']} {b['market_key']} {b['status']} cost ${cost:.2f}"
